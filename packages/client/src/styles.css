@@ -1,0 +1,65 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.screen-message {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 2rem;
+  text-align: center;
+  font-size: 1.2rem;
+}
+
+.umpire-screen,
+.tv-screen,
+.admin-dashboard {
+  padding: 1.5rem;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.score-row {
+  display: flex;
+  gap: 1rem;
+}
+
+.score-row button {
+  flex: 1;
+  font-size: 2rem;
+  padding: 1.5rem;
+}
+
+.tv-score {
+  display: grid;
+  grid-template-columns: 1fr auto auto 1fr;
+  align-items: center;
+  gap: 1rem;
+  font-size: 2rem;
+  text-align: center;
+}
+
+.tv-score-number {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  min-width: 2ch;
+}
+
+.banner {
+  background: #fff3cd;
+  color: #664d03;
+  padding: 0.5rem 1rem;
+  border-radius: 0.25rem;
+  display: inline-block;
+}
+
+.connection-status {
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
