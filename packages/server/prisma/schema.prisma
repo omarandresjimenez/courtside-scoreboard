@@ -1,0 +1,78 @@
+// Prisma schema — mirrors "Set 06 — Data model" of the design spec.
+// SQLite: a single embedded file, no external database service to run
+// on-site (see "Set 02 — Architecture").
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Court {
+  id             String   @id @default(cuid())
+  label          String
+  /// The live pointer a TV screen follows; null while idle. Not a formal
+  /// relation on purpose — assigning a match is a plain field update.
+  currentMatchId String?
+  createdAt      DateTime @default(now())
+}
+
+model Match {
+  id              String       @id @default(cuid())
+  /// "singles" | "doubles"
+  matchType       String
+  /// "CREATED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED"
+  status          String       @default("CREATED")
+  pointsToWin     Int
+  capScore        Int
+  intervalAt      Int
+  /// Locks matchType/scoring fields the moment the first point is scored.
+  scoringLocked   Boolean      @default(false)
+  /// Long random secret; required on every umpire write action.
+  umpireToken     String       @unique
+  /// Last (or current) court this match was played on — for history,
+  /// distinct from Court.currentMatchId which only reflects "right now".
+  assignedCourtId String?
+  createdAt       DateTime     @default(now())
+  startedAt       DateTime?
+  completedAt     DateTime?
+  players         Player[]
+  events          ScoreEvent[]
+}
+
+model Player {
+  id        String @id @default(cuid())
+  matchId   String
+  match     Match  @relation(fields: [matchId], references: [id])
+  /// "A" | "B"
+  side      String
+  name      String
+  shortName String
+
+  @@index([matchId])
+}
+
+/// The append-only source of truth. Every derived value (score, set/match
+/// winner, serve position, interval flags) comes from replaying these
+/// through shared's deriveMatchState() — see packages/server/src/match/replay.ts.
+model ScoreEvent {
+  id        String   @id @default(cuid())
+  matchId   String
+  match     Match    @relation(fields: [matchId], references: [id])
+  /// Client-generated idempotency key — replaying a queued offline action
+  /// twice is safe because of this.
+  eventId   String   @unique
+  /// "START_SET" | "POINT" | "UNDO_LAST_POINT" | "RETIRE"
+  type      String
+  side      String?
+  /// JSON-encoded extra fields for START_SET (firstServerPlayerId, courtPositions).
+  payload   String?
+  timestamp BigInt
+  createdAt DateTime @default(now())
+
+  @@index([matchId, timestamp])
+}
