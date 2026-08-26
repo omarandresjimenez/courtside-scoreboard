@@ -63,3 +63,30 @@ body {
   font-size: 0.85rem;
   opacity: 0.7;
 }
+
+.court-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.court-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.court-list input,
+.created-match-links input {
+  min-width: 22ch;
+}
+
+.created-match-links {
+  border: 1px solid #ccc;
+  border-radius: 0.25rem;
+  padding: 1rem;
+  margin: 1rem 0;
+}
