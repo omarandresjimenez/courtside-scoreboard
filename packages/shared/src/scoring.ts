@@ -94,6 +94,21 @@ export function deriveMatchState(
     switch (event.type) {
       case 'START_SET': {
         if (event.courtPositions) courtPositions = event.courtPositions;
+        // The first server's identity is fixed by law before the first
+        // rally is even played (BWF: the first serve of a game is from
+        // the right court) — so servingSide is knowable immediately,
+        // rather than only after a point is won.
+        if (event.firstServerPlayerId) {
+          const sides = Object.keys(courtPositions) as Side[];
+          servingSide =
+            sides.find((side) => {
+              const sidePositions = courtPositions[side];
+              return (
+                sidePositions?.right === event.firstServerPlayerId ||
+                sidePositions?.left === event.firstServerPlayerId
+              );
+            }) ?? null;
+        }
         break;
       }
 
@@ -164,7 +179,10 @@ export function deriveMatchState(
           // reopen it, then remove the point that had closed it.
           setIndex -= 1;
           const reopened = completedSets.pop()!;
-          if (reopened.winner) setsWon[reopened.winner] -= 1;
+          // Invariant: a set only ever lands in completedSets after its
+          // `winner` field was just set a few lines up in the POINT case,
+          // so this is never null in practice.
+          setsWon[reopened.winner!] -= 1;
           if (matchWinner === reopened.winner) matchWinner = null;
 
           const reopenedStack = pointStacksBySet[setIndex]!;

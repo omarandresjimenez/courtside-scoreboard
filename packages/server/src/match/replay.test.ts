@@ -1,0 +1,58 @@
+import { createFakePrisma } from '../testUtils/fakePrisma.js';
+
+const mockPrisma = createFakePrisma();
+jest.mock('../db/client.js', () => ({ prisma: mockPrisma.prisma }));
+
+// This import must come after jest.mock() above so that when replay.ts's
+// own `import { prisma } from '../db/client.js'` resolves, it resolves to
+// the mock, not the real (here, ungenerated) Prisma client.
+import { loadMatchState } from './replay.js';
+
+describe('loadMatchState', () => {
+  it('returns null when the match does not exist', async () => {
+    expect(await loadMatchState('missing-match')).toBeNull();
+  });
+
+  it('assembles the Match and replays its events through the shared scoring engine', async () => {
+    const match = mockPrisma.seedMatch({ pointsToWin: 21, capScore: 30, intervalAt: 11 });
+    mockPrisma.seedPlayers(match.id, [
+      { side: 'A', name: 'Alice', shortName: 'ALI' },
+      { side: 'B', name: 'Bilal', shortName: 'BIL' },
+    ]);
+    mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(1) });
+    mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(2) });
+
+    const state = await loadMatchState(match.id);
+
+    expect(state?.match.matchId).toBe(match.id);
+    expect(state?.match.players).toHaveLength(2);
+    expect(state?.match.players[0]).toMatchObject({ side: 'A', name: 'Alice', shortName: 'ALI' });
+    expect(state?.derived.currentSet).toMatchObject({ scoreA: 2, scoreB: 0 });
+  });
+
+  it('parses a JSON event payload (doubles START_SET court positions)', async () => {
+    const match = mockPrisma.seedMatch({ matchType: 'doubles' });
+    mockPrisma.seedEvent(match.id, {
+      type: 'START_SET',
+      timestamp: BigInt(1),
+      payload: JSON.stringify({
+        firstServerPlayerId: 'p-right',
+        courtPositions: { A: { right: 'p-right', left: 'p-left' } },
+      }),
+    });
+
+    const state = await loadMatchState(match.id);
+
+    expect(state?.derived.serve.servingSide).toBe('A');
+    expect(state?.derived.serve.serverPlayerId).toBe('p-right');
+  });
+
+  it('treats a missing payload as no extra fields, not an error', async () => {
+    const match = mockPrisma.seedMatch();
+    mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'B', payload: null });
+
+    const state = await loadMatchState(match.id);
+
+    expect(state?.derived.currentSet).toMatchObject({ scoreA: 0, scoreB: 1 });
+  });
+});

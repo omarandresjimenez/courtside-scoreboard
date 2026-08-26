@@ -5,7 +5,14 @@ import eslintConfigPrettier from 'eslint-config-prettier';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/.vite/**', '**/generated/**'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/.vite/**',
+      '**/generated/**',
+      '**/coverage/**',
+      '**/jest.config.cjs',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
