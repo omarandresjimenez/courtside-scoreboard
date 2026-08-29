@@ -44,9 +44,15 @@ export interface UndoLastPointPayload {
   eventId: string;
 }
 
+export interface ResumeFromIntervalPayload {
+  matchId: string;
+  eventId: string;
+}
+
 export interface StartSetPayload {
   matchId: string;
   eventId: string;
+  firstServerSide: Side;
   firstServerPlayerId?: string;
   courtPositions?: CourtPositions;
 }

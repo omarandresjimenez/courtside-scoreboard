@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { SERVER_EVENTS, UMPIRE_EVENTS, type MatchStatePayload } from '@courtside/shared';
+import {
+  SERVER_EVENTS,
+  UMPIRE_EVENTS,
+  type CourtPositions,
+  type MatchStatePayload,
+  type Side,
+} from '@courtside/shared';
 import { connectSocket, type SocketConnectionOptions } from './socket.js';
 import { cacheMatchState, readCachedMatchState } from './offlineCache.js';
+import { generateEventId } from './id.js';
 
 interface UseMatchStateResult {
   state: MatchStatePayload | null;
@@ -11,6 +18,12 @@ interface UseMatchStateResult {
   error: string | null;
   addPoint: (side: 'A' | 'B') => void;
   undoLastPoint: () => void;
+  startSet: (
+    firstServerSide: Side,
+    firstServerPlayerId: string,
+    courtPositions?: CourtPositions,
+  ) => void;
+  resumeFromInterval: () => void;
 }
 
 /**
@@ -79,7 +92,7 @@ export function useMatchState(
       if (!('matchId' in options)) return;
       socketRef.current?.emit(UMPIRE_EVENTS.ADD_POINT, {
         matchId: options.matchId,
-        eventId: crypto.randomUUID(),
+        eventId: generateEventId(),
         side,
       });
     },
@@ -87,7 +100,24 @@ export function useMatchState(
       if (!('matchId' in options)) return;
       socketRef.current?.emit(UMPIRE_EVENTS.UNDO_LAST_POINT, {
         matchId: options.matchId,
-        eventId: crypto.randomUUID(),
+        eventId: generateEventId(),
+      });
+    },
+    startSet: (firstServerSide, firstServerPlayerId, courtPositions) => {
+      if (!('matchId' in options)) return;
+      socketRef.current?.emit(UMPIRE_EVENTS.START_SET, {
+        matchId: options.matchId,
+        eventId: generateEventId(),
+        firstServerSide,
+        firstServerPlayerId,
+        ...(courtPositions ? { courtPositions } : {}),
+      });
+    },
+    resumeFromInterval: () => {
+      if (!('matchId' in options)) return;
+      socketRef.current?.emit(UMPIRE_EVENTS.RESUME_FROM_INTERVAL, {
+        matchId: options.matchId,
+        eventId: generateEventId(),
       });
     },
   };

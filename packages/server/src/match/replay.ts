@@ -20,6 +20,9 @@ export async function loadMatchState(matchId: string): Promise<MatchStatePayload
     include: { players: true, events: { orderBy: { timestamp: 'asc' } } },
   });
   if (!record) return null;
+  const court = record.assignedCourtId
+    ? await prisma.court.findUnique({ where: { id: record.assignedCourtId } })
+    : null;
 
   const events: ScoreEvent[] = record.events.map((row) => {
     const payload = row.payload ? (JSON.parse(row.payload) as Record<string, unknown>) : {};
@@ -27,9 +30,14 @@ export async function loadMatchState(matchId: string): Promise<MatchStatePayload
       eventId: row.eventId,
       matchId: row.matchId,
       type: row.type as ScoreEvent['type'],
-      side: (row.side as Side | null) ?? undefined,
-      firstServerPlayerId: payload.firstServerPlayerId as string | undefined,
-      courtPositions: payload.courtPositions as CourtPositions | undefined,
+      ...(row.side ? { side: row.side as Side } : {}),
+      ...(payload.firstServerPlayerId
+        ? { firstServerPlayerId: payload.firstServerPlayerId as string }
+        : {}),
+      ...(payload.firstServerSide ? { firstServerSide: payload.firstServerSide as Side } : {}),
+      ...(payload.courtPositions
+        ? { courtPositions: payload.courtPositions as CourtPositions }
+        : {}),
       timestamp: Number(row.timestamp),
     };
   });
@@ -40,8 +48,17 @@ export async function loadMatchState(matchId: string): Promise<MatchStatePayload
     intervalAt: record.intervalAt,
   };
 
+  const derived = deriveMatchState(events, scoringConfig);
+  const startedEvent = events.find((event) => event.type === 'START_SET' || event.type === 'POINT');
+  const completedEvent = derived.matchWinner
+    ? [...events].reverse().find((event) => event.type === 'POINT' || event.type === 'RETIRE')
+    : undefined;
+  const timestampToIso = (event: ScoreEvent | undefined): string | null =>
+    event ? new Date(event.timestamp).toISOString() : null;
+
   const match: Match = {
     matchId: record.id,
+    tournamentId: record.tournamentId,
     matchType: record.matchType as Match['matchType'],
     status: record.status as Match['status'],
     scoringConfig,
@@ -53,13 +70,13 @@ export async function loadMatchState(matchId: string): Promise<MatchStatePayload
       shortName: p.shortName,
     })),
     umpireToken: record.umpireToken,
+    umpireCode: record.umpireCode,
     assignedCourtId: record.assignedCourtId,
+    courtLabel: court?.label ?? null,
     createdAt: record.createdAt.toISOString(),
-    startedAt: record.startedAt?.toISOString() ?? null,
-    completedAt: record.completedAt?.toISOString() ?? null,
+    startedAt: record.startedAt?.toISOString() ?? timestampToIso(startedEvent),
+    completedAt: record.completedAt?.toISOString() ?? timestampToIso(completedEvent),
   };
-
-  const derived = deriveMatchState(events, scoringConfig);
 
   return { match, derived };
 }

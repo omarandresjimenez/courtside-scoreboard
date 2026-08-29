@@ -37,13 +37,23 @@ export interface Player {
 
 export interface Court {
   courtId: string;
+  tournamentId?: string | null;
   label: string;
   /** The live pointer a TV screen follows. Null when the court is idle. */
   currentMatchId: string | null;
+  /** Short, human-typeable code for the /tv join screen — stable for the court's lifetime. */
+  tvCode: string;
+}
+
+export interface Tournament {
+  tournamentId: string;
+  name: string;
+  date: string;
 }
 
 export interface Match {
   matchId: string;
+  tournamentId?: string | null;
   matchType: MatchType;
   status: MatchStatus;
   scoringConfig: ScoringConfig;
@@ -52,14 +62,19 @@ export interface Match {
   players: Player[];
   /** Long random secret. Required on every umpire write action. */
   umpireToken: string;
+  /** Short, human-typeable code that resolves to matchId + umpireToken on the /umpire join screen. */
+  umpireCode: string;
   /** Last (or current) court this match was played on, for history display. */
   assignedCourtId: string | null;
+  /** Resolved court label for the live umpire and TV displays. */
+  courtLabel?: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
 }
 
-export type ScoreEventType = 'START_SET' | 'POINT' | 'UNDO_LAST_POINT' | 'RETIRE';
+export type ScoreEventType =
+  'START_SET' | 'POINT' | 'UNDO_LAST_POINT' | 'RETIRE' | 'RESUME_INTERVAL';
 
 /** Doubles-only: which partner currently occupies which service court, per side. */
 export type CourtPositions = Partial<Record<Side, { right: string; left: string }>>;
@@ -72,10 +87,29 @@ export type CourtPositions = Partial<Record<Side, { right: string; left: string 
 /** A safe, list-view projection of Match — deliberately omits umpireToken. */
 export interface MatchSummary {
   matchId: string;
+  tournamentId?: string | null;
   matchType: MatchType;
   status: MatchStatus;
   assignedCourtId: string | null;
+  courtLabel: string | null;
   createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  players: Player[];
+  derived: DerivedMatchSummary;
+}
+
+export interface MatchSetSummary {
+  setNumber: number;
+  scoreA: number;
+  scoreB: number;
+  winner: Side | null;
+}
+
+export interface DerivedMatchSummary {
+  sets: MatchSetSummary[];
+  setsWon: Record<Side, number>;
+  matchWinner: Side | null;
 }
 
 export interface ScoreEvent {
@@ -86,6 +120,8 @@ export interface ScoreEvent {
   side?: Side;
   /** START_SET only. */
   firstServerPlayerId?: string;
+  /** START_SET only; needed for singles, where no doubles court layout exists. */
+  firstServerSide?: Side;
   /** START_SET only, doubles matches. */
   courtPositions?: CourtPositions;
   timestamp: number;

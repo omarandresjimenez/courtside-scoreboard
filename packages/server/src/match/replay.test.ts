@@ -55,4 +55,45 @@ describe('loadMatchState', () => {
 
     expect(state?.derived.currentSet).toMatchObject({ scoreA: 0, scoreB: 1 });
   });
+
+  it('derives legacy match timestamps from scoring events when database timestamps are absent', async () => {
+    const match = mockPrisma.seedMatch({ pointsToWin: 1, capScore: 2 });
+    mockPrisma.seedEvent(match.id, {
+      type: 'START_SET',
+      timestamp: BigInt(Date.parse('2026-08-29T10:00:00.000Z')),
+      payload: JSON.stringify({ firstServerSide: 'A' }),
+    });
+    for (const timestamp of [30_000, 60_000, 90_000, 150_000]) {
+      mockPrisma.seedEvent(match.id, {
+        type: 'POINT',
+        side: 'A',
+        timestamp: BigInt(Date.parse('2026-08-29T10:00:00.000Z') + timestamp),
+      });
+    }
+
+    const state = await loadMatchState(match.id);
+
+    expect(state?.derived.matchWinner).toBe('A');
+    expect(state?.match.startedAt).toBe('2026-08-29T10:00:00.000Z');
+    expect(state?.match.completedAt).toBe('2026-08-29T10:02:30.000Z');
+  });
+
+  it('derives completedAt from a RETIRE event when the match ends by retirement, not a point', async () => {
+    const match = mockPrisma.seedMatch();
+    mockPrisma.seedEvent(match.id, {
+      type: 'POINT',
+      side: 'A',
+      timestamp: BigInt(Date.parse('2026-08-29T10:00:00.000Z')),
+    });
+    mockPrisma.seedEvent(match.id, {
+      type: 'RETIRE',
+      side: 'A',
+      timestamp: BigInt(Date.parse('2026-08-29T10:05:00.000Z')),
+    });
+
+    const state = await loadMatchState(match.id);
+
+    expect(state?.derived.matchWinner).toBe('A');
+    expect(state?.match.completedAt).toBe('2026-08-29T10:05:00.000Z');
+  });
 });

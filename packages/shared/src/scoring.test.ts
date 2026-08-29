@@ -17,6 +17,7 @@ function undo(matchId = 'm1'): ScoreEvent {
 function startSet(
   courtPositions?: CourtPositions,
   firstServerPlayerId?: string,
+  firstServerSide?: Side,
   matchId = 'm1',
 ): ScoreEvent {
   seq += 1;
@@ -27,11 +28,16 @@ function startSet(
     timestamp: seq,
     ...(courtPositions ? { courtPositions } : {}),
     ...(firstServerPlayerId ? { firstServerPlayerId } : {}),
+    ...(firstServerSide ? { firstServerSide } : {}),
   };
 }
 function retire(side: Side, matchId = 'm1'): ScoreEvent {
   seq += 1;
   return { eventId: `e${seq}`, matchId, type: 'RETIRE', side, timestamp: seq };
+}
+function resumeInterval(matchId = 'm1'): ScoreEvent {
+  seq += 1;
+  return { eventId: `e${seq}`, matchId, type: 'RESUME_INTERVAL', timestamp: seq };
 }
 
 describe('checkSetWinner', () => {
@@ -78,6 +84,38 @@ describe('deriveMatchState', () => {
   it('flags the mid-set interval once a side reaches intervalAt', () => {
     const events = Array.from({ length: 11 }, () => point('A'));
     const state = deriveMatchState(events, standard);
+    expect(state.onInterval).toBe(true);
+  });
+
+  it('clears the interval flag once the umpire resumes play', () => {
+    const events = [...Array.from({ length: 11 }, () => point('A')), resumeInterval()];
+    const state = deriveMatchState(events, standard);
+    expect(state.onInterval).toBe(false);
+  });
+
+  it('keeps the interval resumed as further points come in', () => {
+    const events = [...Array.from({ length: 11 }, () => point('A')), resumeInterval(), point('B')];
+    const state = deriveMatchState(events, standard);
+    expect(state.onInterval).toBe(false);
+  });
+
+  it("a resume event before intervalAt is reached has no effect (can't happen via the UI)", () => {
+    const events = [resumeInterval(), point('A')];
+    const state = deriveMatchState(events, standard);
+    expect(state.onInterval).toBe(false);
+    expect(state.currentSet.scoreA).toBe(1);
+  });
+
+  it('re-arms the interval flag in a fresh set after resuming the previous one', () => {
+    const events = [
+      ...Array.from({ length: 20 }, () => point('A')),
+      resumeInterval(),
+      ...Array.from({ length: 15 }, () => point('B')),
+      point('A'), // closes set 1 at 21-15
+      ...Array.from({ length: 11 }, () => point('B')), // set 2 hits its own interval
+    ];
+    const state = deriveMatchState(events, standard);
+    expect(state.currentSet.setNumber).toBe(2);
     expect(state.onInterval).toBe(true);
   });
 
@@ -208,6 +246,20 @@ describe('deriveMatchState', () => {
   it('tracks singles serve side without a doubles court assignment', () => {
     const state = deriveMatchState([point('A')], standard);
     expect(state.serve.servingSide).toBe('A');
+    expect(state.serve.serverPlayerId).toBeNull();
+  });
+
+  it('names the opening server in singles before any point is scored', () => {
+    // Singles has no courtPositions, so serverFor() alone can't identify
+    // the server — this is the one case that needs the firstServerSide/
+    // firstServerPlayerId fallback recorded by START_SET.
+    const state = deriveMatchState([startSet(undefined, 'alice', 'A')], standard);
+    expect(state.serve).toMatchObject({ servingSide: 'A', serverPlayerId: 'alice' });
+  });
+
+  it('clears the singles server name once the other side takes the serve', () => {
+    const state = deriveMatchState([startSet(undefined, 'alice', 'A'), point('B')], standard);
+    expect(state.serve.servingSide).toBe('B');
     expect(state.serve.serverPlayerId).toBeNull();
   });
 

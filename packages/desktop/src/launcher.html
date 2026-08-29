@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Courtside Scoreboard</title>
+    <style>
+      :root {
+        --bg: #0a0e1a;
+        --bg-raised: #12182b;
+        --bg-raised-2: #1a2238;
+        --border: rgba(148, 163, 184, 0.16);
+        --border-strong: rgba(148, 163, 184, 0.3);
+        --text: #f1f5f9;
+        --text-dim: #94a3b8;
+        --text-faint: #64748b;
+        --accent: #22d3ee;
+        --accent-2: #c084fc;
+        --success: #34d399;
+        --warning: #fbbf24;
+        --danger: #f87171;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: radial-gradient(ellipse 120% 80% at 50% -10%, #131c33 0%, var(--bg) 55%);
+        color: var(--text);
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          'Segoe UI',
+          Roboto,
+          sans-serif;
+        padding: 1.75rem;
+        -webkit-font-smoothing: antialiased;
+      }
+      h1 {
+        font-size: 1.3rem;
+        margin: 0 0 0.15rem;
+      }
+      .subtitle {
+        color: var(--text-dim);
+        font-size: 0.9rem;
+        margin: 0 0 1.5rem;
+      }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding: 0.35rem 0.7rem;
+        border-radius: 999px;
+        border: 1px solid var(--border-strong);
+        background: var(--bg-raised);
+        margin-bottom: 1.5rem;
+      }
+      .status::before {
+        content: '';
+        width: 0.5rem;
+        height: 0.5rem;
+        border-radius: 50%;
+        background: var(--text-faint);
+      }
+      .status.running {
+        color: var(--success);
+      }
+      .status.running::before {
+        background: var(--success);
+      }
+      .status.starting {
+        color: var(--warning);
+      }
+      .status.starting::before {
+        background: var(--warning);
+      }
+      .status.error {
+        color: var(--danger);
+      }
+      .status.error::before {
+        background: var(--danger);
+      }
+      .card {
+        background: var(--bg-raised);
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+        padding: 1.1rem 1.25rem;
+        margin-bottom: 1rem;
+      }
+      .card-label {
+        font-size: 0.78rem;
+        color: var(--text-faint);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin: 0 0 0.5rem;
+      }
+      .address {
+        font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+        font-size: 1.15rem;
+        font-weight: 700;
+        color: var(--accent);
+        word-break: break-all;
+      }
+      button {
+        font: inherit;
+        color: var(--text);
+        background: var(--bg-raised-2);
+        border: 1px solid var(--border-strong);
+        border-radius: 0.5rem;
+        padding: 0.5rem 0.9rem;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+      button.primary {
+        width: 100%;
+        background: var(--accent);
+        color: #04222a;
+        border: none;
+        font-weight: 700;
+        font-size: 1rem;
+        padding: 0.85rem;
+        border-radius: 0.6rem;
+        margin: 0.5rem 0 1.25rem;
+      }
+      button.primary:hover {
+        filter: brightness(1.08);
+      }
+      button.primary:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      input,
+      select {
+        width: 100%;
+        font: inherit;
+        color: var(--text);
+        background: var(--bg-raised-2);
+        border: 1px solid var(--border-strong);
+        border-radius: 0.5rem;
+        padding: 0.55rem 0.7rem;
+      }
+      .tournament-controls {
+        display: grid;
+        gap: 0.65rem;
+      }
+      .tournament-create {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 0.5rem;
+      }
+      .tournament-message {
+        min-height: 1.2rem;
+        margin: 0;
+        color: var(--text-dim);
+        font-size: 0.8rem;
+      }
+      .hint {
+        color: var(--text-dim);
+        font-size: 0.85rem;
+        line-height: 1.5;
+      }
+      .error-detail {
+        font-family: ui-monospace, monospace;
+        font-size: 0.78rem;
+        color: var(--danger);
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 8rem;
+        overflow-y: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Courtside Scoreboard</h1>
+    <p class="subtitle">Match-day server</p>
+
+    <span class="status starting" id="status">Starting…</span>
+
+    <div class="card" id="address-card" style="display: none">
+      <p class="card-label">On this Wi-Fi, other devices reach it at</p>
+      <div class="address" id="address">—</div>
+    </div>
+
+    <div class="card" id="tournament-card" style="display: none">
+      <p class="card-label">Tournament</p>
+      <div class="tournament-controls">
+        <select id="tournament-select" aria-label="Tournament">
+          <option value="">Select a tournament</option>
+        </select>
+        <div class="tournament-create">
+          <input
+            id="tournament-name"
+            placeholder="New tournament name"
+            aria-label="New tournament name"
+          />
+          <button id="create-tournament" type="button">Add</button>
+        </div>
+        <p class="tournament-message" id="tournament-message"></p>
+      </div>
+    </div>
+
+    <div class="card" id="error-card" style="display: none">
+      <p class="card-label">Server error</p>
+      <div class="error-detail" id="error-detail"></div>
+    </div>
+
+    <button class="primary" id="open-dashboard" disabled>Open Admin Dashboard</button>
+
+    <p class="hint">
+      TV and umpire devices don't need this address typed in — the admin dashboard shows a short
+      code for each court and match that they can enter instead, at
+      <code>/tv</code> or <code>/umpire</code>.
+    </p>
+
+    <script>
+      const statusEl = document.getElementById('status');
+      const addressCard = document.getElementById('address-card');
+      const addressEl = document.getElementById('address');
+      const errorCard = document.getElementById('error-card');
+      const errorDetailEl = document.getElementById('error-detail');
+      const openButton = document.getElementById('open-dashboard');
+      const tournamentCard = document.getElementById('tournament-card');
+      const tournamentSelect = document.getElementById('tournament-select');
+      const tournamentName = document.getElementById('tournament-name');
+      const createTournamentButton = document.getElementById('create-tournament');
+      const tournamentMessage = document.getElementById('tournament-message');
+      let tournaments = [];
+      let serverRunning = false;
+
+      function selectedTournament() {
+        return tournaments.find((tournament) => tournament.tournamentId === tournamentSelect.value);
+      }
+
+      function updateOpenButton() {
+        openButton.disabled = !serverRunning || !selectedTournament();
+      }
+
+      function renderTournaments() {
+        const selectedId = tournamentSelect.value;
+        tournamentSelect.replaceChildren(new Option('Select a tournament', ''));
+        tournaments.forEach((tournament) => {
+          const date = new Date(tournament.date).toLocaleDateString();
+          tournamentSelect.add(new Option(tournament.name + ' · ' + date, tournament.tournamentId));
+        });
+        tournamentSelect.value = tournaments.some(
+          (tournament) => tournament.tournamentId === selectedId,
+        )
+          ? selectedId
+          : tournaments[0]?.tournamentId || '';
+        updateOpenButton();
+      }
+
+      async function loadTournaments() {
+        try {
+          tournaments = await window.courtside.listTournaments();
+          renderTournaments();
+        } catch (error) {
+          tournamentMessage.textContent = error.message;
+        }
+      }
+
+      function render(state) {
+        statusEl.className = 'status ' + state.status;
+        statusEl.textContent =
+          state.status === 'running' ? 'Running' : state.status === 'error' ? 'Error' : 'Starting…';
+
+        const address = state.addresses && state.addresses[0];
+        addressCard.style.display = 'block';
+        addressEl.textContent = address
+          ? 'http://' + address + ':' + state.port
+          : 'No Wi-Fi connection detected';
+
+        errorCard.style.display = state.status === 'error' ? 'block' : 'none';
+        errorDetailEl.textContent = state.message || '';
+
+        serverRunning = state.status === 'running';
+        tournamentCard.style.display = serverRunning ? 'block' : 'none';
+        updateOpenButton();
+        if (serverRunning && tournaments.length === 0) void loadTournaments();
+      }
+
+      window.courtside.onStateUpdate(render);
+      window.courtside.getState();
+
+      tournamentSelect.addEventListener('change', updateOpenButton);
+      createTournamentButton.addEventListener('click', async () => {
+        const name = tournamentName.value.trim();
+        if (!name) return;
+        createTournamentButton.disabled = true;
+        tournamentMessage.textContent = 'Creating tournament…';
+        try {
+          const created = await window.courtside.createTournament(name);
+          tournaments = [created, ...tournaments];
+          tournamentSelect.value = created.tournamentId;
+          tournamentName.value = '';
+          tournamentMessage.textContent = 'Main Court created.';
+          renderTournaments();
+          tournamentSelect.value = created.tournamentId;
+          updateOpenButton();
+        } catch (error) {
+          tournamentMessage.textContent = error.message;
+        } finally {
+          createTournamentButton.disabled = false;
+        }
+      });
+
+      openButton.addEventListener('click', () =>
+        window.courtside.openDashboard(selectedTournament()),
+      );
+    </script>
+  </body>
+</html>

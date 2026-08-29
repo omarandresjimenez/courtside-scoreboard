@@ -13,6 +13,11 @@ describe('config', () => {
   it('defaults port to 3000 and adminPassword to "change-me" when unset', async () => {
     delete process.env.PORT;
     delete process.env.ADMIN_PASSWORD;
+    // config.ts's `import 'dotenv/config'` would otherwise silently
+    // repopulate PORT/ADMIN_PASSWORD from this machine's real
+    // packages/server/.env during the re-import below, defeating the
+    // deletes above and hiding the fallback branch from ever running.
+    process.env.DOTENV_CONFIG_PATH = '/nonexistent/.env-for-testing-only';
     const { config } = await import('./config.js');
     expect(config.port).toBe(3000);
     expect(config.adminPassword).toBe('change-me');

@@ -23,6 +23,8 @@ export interface SetResult {
   winner: Side | null;
   /** True once either score has reached scoringConfig.intervalAt this set. */
   intervalTriggered: boolean;
+  /** True once the umpire has dismissed this set's interval break. */
+  intervalResumed: boolean;
 }
 
 export interface ServeState {
@@ -46,7 +48,14 @@ export interface DerivedMatchState {
 const otherSide = (side: Side): Side => (side === 'A' ? 'B' : 'A');
 
 function emptySet(setNumber: number): SetResult {
-  return { setNumber, scoreA: 0, scoreB: 0, winner: null, intervalTriggered: false };
+  return {
+    setNumber,
+    scoreA: 0,
+    scoreB: 0,
+    winner: null,
+    intervalTriggered: false,
+    intervalResumed: false,
+  };
 }
 
 /**
@@ -85,6 +94,8 @@ export function deriveMatchState(
   let matchWinner: Side | null = null;
   let courtPositions: CourtPositions = {};
   let servingSide: Side | null = null;
+  let firstServerPlayerId: string | null = null;
+  let firstServerSide: Side | null = null;
 
   for (const event of events) {
     // A stray event after completion is ignored, except the undo that's
@@ -94,6 +105,8 @@ export function deriveMatchState(
     switch (event.type) {
       case 'START_SET': {
         if (event.courtPositions) courtPositions = event.courtPositions;
+        firstServerPlayerId = event.firstServerPlayerId ?? null;
+        firstServerSide = event.firstServerSide ?? null;
         // The first server's identity is fixed by law before the first
         // rally is even played (BWF: the first serve of a game is from
         // the right court) — so servingSide is knowable immediately,
@@ -109,11 +122,17 @@ export function deriveMatchState(
               );
             }) ?? null;
         }
+        servingSide ??= event.firstServerSide ?? null;
         break;
       }
 
       case 'RETIRE': {
         if (event.side) matchWinner = event.side;
+        break;
+      }
+
+      case 'RESUME_INTERVAL': {
+        current.intervalResumed = true;
         break;
       }
 
@@ -193,6 +212,7 @@ export function deriveMatchState(
             scoreB: reopened.scoreB - (undonePoint === 'B' ? 1 : 0),
             winner: null,
             intervalTriggered: false,
+            intervalResumed: false,
           };
           current.intervalTriggered = Math.max(current.scoreA, current.scoreB) >= config.intervalAt;
           servingSide = reopenedStack.length > 0 ? reopenedStack[reopenedStack.length - 1]! : null;
@@ -204,7 +224,11 @@ export function deriveMatchState(
   }
 
   const serverPlayerId = servingSide
-    ? serverFor(servingSide, servingSide === 'A' ? current.scoreA : current.scoreB, courtPositions)
+    ? (serverFor(
+        servingSide,
+        servingSide === 'A' ? current.scoreA : current.scoreB,
+        courtPositions,
+      ) ?? (servingSide === firstServerSide ? firstServerPlayerId : null))
     : null;
 
   return {
@@ -213,7 +237,7 @@ export function deriveMatchState(
     setsWon,
     matchWinner,
     serve: { servingSide, serverPlayerId, courtPositions },
-    onInterval: current.intervalTriggered && !matchWinner,
+    onInterval: current.intervalTriggered && !current.intervalResumed && !matchWinner,
   };
 }
 

@@ -1,0 +1,113 @@
+{
+  "name": "@courtside/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop wrapper for the Courtside Scoreboard server — double-click to run match day, no CLI required.",
+  "author": "Courtside Scoreboard",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:template-db": "node scripts/build-template-db.js",
+    "build:runtime-deps": "node scripts/build-runtime-deps.js",
+    "pack:win-source": "node scripts/pack-windows-source.js",
+    "predist:win": "node scripts/require-windows-build-host.js",
+    "dist:mac": "npm run build:template-db && npm run build:runtime-deps && electron-builder --mac",
+    "dist:win": "npm run build:template-db && npm run build:runtime-deps && electron-builder --win",
+    "dist": "npm run build:template-db && npm run build:runtime-deps && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.courtside.scoreboard",
+    "productName": "Courtside Scoreboard",
+    "directories": {
+      "output": "release",
+      "buildResources": "build-assets"
+    },
+    "npmRebuild": false,
+    "buildDependenciesFromSource": false,
+    "files": [
+      "src/**/*",
+      "!**/node_modules/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/template.db",
+        "to": "template.db"
+      },
+      {
+        "from": "../server/src",
+        "to": "server/src"
+      },
+      {
+        "from": "../server/package.json",
+        "to": "server/package.json"
+      },
+      {
+        "from": "../server/generated",
+        "to": "server/generated"
+      },
+      {
+        "from": "../client/dist",
+        "to": "client-dist"
+      },
+      {
+        "from": "../server/node_modules",
+        "to": "node_modules",
+        "filter": [
+          "**/*",
+          "!.bin",
+          "!**/*.md",
+          "!**/*.map",
+          "!**/test/**",
+          "!**/tests/**",
+          "!**/__tests__/**",
+          "!**/*.ts",
+          "!**/*.spec.*",
+          "!@courtside/shared",
+          "!@courtside/shared/**"
+        ]
+      },
+      {
+        "from": "../shared/src",
+        "to": "node_modules/@courtside/shared/src"
+      },
+      {
+        "from": "../shared/package.json",
+        "to": "node_modules/@courtside/shared/package.json"
+      }
+    ],
+    "asarUnpack": [
+      "**/node_modules/tsx/**",
+      "**/node_modules/@prisma/**",
+      "**/node_modules/.prisma/**",
+      "**/generated/prisma/**"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.sports",
+      "hardenedRuntime": false,
+      "icon": "build-assets/icon.icns"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build-assets/icon.ico"
+    }
+  }
+}

@@ -23,8 +23,12 @@ packages/
   server/   Node.js + Express + Socket.io + Prisma/SQLite. The single
             source of truth for every match; SQLite is one embedded file,
             no external database service to run on-site.
-  client/   React + TypeScript + Vite. One app with three routes:
-            /admin, /umpire/:matchId, and /tv/court/:courtId.
+  client/   React + TypeScript + Vite. One app with three role screens —
+            /admin, /umpire/:matchId, /tv/court/:courtId — plus /umpire
+            and /tv with no id, which take a short join code instead.
+  desktop/  Electron wrapper that packages the server and the built
+            client into a double-click macOS/Windows app. See
+            "Desktop installers" below.
 ```
 
 ## Getting started
@@ -62,6 +66,74 @@ itself.
 A full step-by-step walkthrough for the network side (router, static IP,
 firewall, generating each match's QR codes, and a pre-match checklist)
 lives in the companion setup guide.
+
+## Desktop installers
+
+`packages/desktop` wraps the server and the built client into a
+double-click Electron app, so a match-day admin never touches a terminal.
+Build each installer **on its target operating system** — the packaged
+server ships native runtime dependencies that must match the platform.
+
+Three things have to exist before `electron-builder` runs, because the
+packaging config copies all of them into the app as `extraResources`:
+
+```bash
+npm install
+npm run build --workspace packages/client                 # -> packages/client/dist
+npx prisma generate --schema=packages/server/prisma/schema.prisma  # -> packages/server/generated
+```
+
+`packages/server/generated/` is gitignored, so a fresh clone does **not**
+have it and the build fails on the missing directory until you run
+`prisma generate`. It emits a query engine per entry in the schema's
+`binaryTargets`, which is why a Windows build needs that step too.
+
+Then build:
+
+```bash
+npm run dist:mac --workspace packages/desktop # macOS, arm64 .dmg
+npm run dist:win --workspace packages/desktop # Windows x64 .exe, run on Windows
+```
+
+Both `dist:*` scripts first regenerate `packages/desktop/resources/template.db`
+(a pre-migrated empty SQLite file the app copies on first launch) and then
+run `scripts/build-runtime-deps.js`, which **replaces
+`packages/server/node_modules` with a production-only tree** so the
+installer doesn't ship Jest, Prisma's CLI and TypeScript. That is a real
+side effect on your working copy: run `npm install` afterwards to get the
+dev tooling back before running tests or typechecks.
+
+Output lands in `packages/desktop/release/` (gitignored).
+
+### Building the Windows installer
+
+`dist:win` refuses to run anywhere but Windows — see
+`packages/desktop/scripts/require-windows-build-host.js`. A Windows
+installer cross-built on macOS would package macOS-native dependencies and
+crash when its embedded server starts.
+
+To build it, copy the repository to a Windows machine (a zip of the source
+tree, minus `node_modules` and `release/`, is enough — there is a helper at
+`packages/desktop/scripts/pack-windows-source.js`), then, with Node 20+
+installed:
+
+```powershell
+npm install
+npm run build --workspace packages/client
+npx prisma generate --schema=packages/server/prisma/schema.prisma
+npm run dist:win --workspace packages/desktop
+```
+
+The installer appears at
+`packages\desktop\release\Courtside Scoreboard Setup <version>.exe`.
+
+### Code signing
+
+Neither installer is signed. macOS Gatekeeper and Windows SmartScreen both
+warn on first launch — on macOS, right-click the app and choose **Open**;
+on Windows, choose **More info** then **Run anyway**. Removing those
+warnings requires an Apple Developer ID and a Windows code-signing
+certificate.
 
 ## Quality gates
 

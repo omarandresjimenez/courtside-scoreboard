@@ -3,14 +3,83 @@ import {
   SCORING_PRESETS,
   type Court,
   type Match,
+  type MatchStatePayload,
   type MatchSummary,
   type MatchType,
   type ScoringPresetName,
 } from '@courtside/shared';
+import { copyToClipboard } from '../lib/clipboard.js';
 
 interface CreatedMatchLinks {
   matchId: string;
+  courtLabel: string | null;
   umpireLink: string;
+  umpireCode: string;
+}
+
+type MatchSummaryResponse = Partial<MatchSummary> &
+  Pick<MatchSummary, 'matchId' | 'matchType' | 'status' | 'createdAt'>;
+
+function normalizeMatchSummary(match: MatchSummaryResponse): MatchSummary {
+  return {
+    ...match,
+    assignedCourtId: match.assignedCourtId ?? null,
+    courtLabel: match.courtLabel ?? null,
+    players: match.players ?? [],
+    derived: match.derived ?? {
+      sets: [],
+      setsWon: { A: 0, B: 0 },
+      matchWinner: null,
+    },
+  };
+}
+
+function summaryFromMatchState(state: MatchStatePayload): MatchSummary {
+  return {
+    matchId: state.match.matchId,
+    matchType: state.match.matchType,
+    status: state.match.status,
+    assignedCourtId: state.match.assignedCourtId,
+    courtLabel: state.match.courtLabel ?? null,
+    createdAt: state.match.createdAt,
+    startedAt: state.match.startedAt,
+    completedAt: state.match.completedAt,
+    players: state.match.players,
+    derived: {
+      sets: state.derived.sets.map(({ setNumber, scoreA, scoreB, winner }) => ({
+        setNumber,
+        scoreA,
+        scoreB,
+        winner,
+      })),
+      setsWon: state.derived.setsWon,
+      matchWinner: state.derived.matchWinner,
+    },
+  };
+}
+
+function needsMatchDetail(match: MatchSummaryResponse): boolean {
+  return !match.players || !match.derived || match.courtLabel === undefined;
+}
+
+function displayStatus(match: MatchSummary): string {
+  if (match.derived.matchWinner || match.status === 'COMPLETED') return 'Finalized';
+  if (
+    match.status === 'IN_PROGRESS' ||
+    match.derived.sets.some((set) => set.scoreA > 0 || set.scoreB > 0)
+  ) {
+    return 'Match in progress';
+  }
+  return 'Match ready';
+}
+
+function formatDuration(startedAt?: string | null, completedAt?: string | null): string | null {
+  if (!startedAt) return null;
+  const end = completedAt ? Date.parse(completedAt) : Date.now();
+  const elapsedSeconds = Math.max(0, Math.floor((end - Date.parse(startedAt)) / 1000));
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+  return `${minutes} min ${seconds} sec`;
 }
 
 function absoluteUrl(pathAndQuery: string): string {
@@ -25,17 +94,6 @@ function tvLinkFor(court: Pick<Court, 'courtId'>): string {
   return absoluteUrl(`/tv/court/${court.courtId}`);
 }
 
-/** Best-effort clipboard copy — the Clipboard API needs a secure context,
- * which a plain http://<lan-ip> address on match day isn't, so every link
- * is also shown in a tap-to-select input as a fallback that always works. */
-async function copyToClipboard(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // Ignored — the visible, selectable link field is the reliable path.
-  }
-}
-
 /**
  * Set 09's admin dashboard: create courts, create matches (optionally onto
  * a court), and get back the two links that matter — the umpire link
@@ -44,9 +102,23 @@ async function copyToClipboard(text: string): Promise<void> {
  * and match editing are the next wiring pass — see the design doc's "Set 09".
  */
 export function AdminDashboard() {
-  const [adminPassword, setAdminPassword] = useState(
-    () => localStorage.getItem('courtside:adminPassword') ?? '',
-  );
+  const tournamentId =
+    new URLSearchParams(window.location.search).get('tournamentId') ??
+    localStorage.getItem('courtside:tournamentId') ??
+    '';
+  const tournamentName = new URLSearchParams(window.location.search).get('tournamentName') ?? '';
+  const tournamentDate = new URLSearchParams(window.location.search).get('tournamentDate');
+  const [adminPassword, setAdminPassword] = useState(() => {
+    // The desktop app opens this URL with the password already in hand
+    // (it generated it) — no reason to make the person running it type or
+    // even see a password for their own local server.
+    const fromUrl = new URLSearchParams(window.location.search).get('adminPassword');
+    return fromUrl || localStorage.getItem('courtside:adminPassword') || '';
+  });
+  // Captured once at mount, not derived from adminPassword directly — the
+  // field must stay visible while someone is mid-way through typing a
+  // fresh password, not disappear the moment it becomes non-empty.
+  const [showPasswordField] = useState(() => !adminPassword);
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [courts, setCourts] = useState<Court[]>([]);
   const [matchType, setMatchType] = useState<MatchType>('singles');
@@ -61,21 +133,72 @@ export function AdminDashboard() {
     localStorage.setItem('courtside:adminPassword', adminPassword);
   }, [adminPassword]);
 
+  useEffect(() => {
+    if (tournamentId) localStorage.setItem('courtside:tournamentId', tournamentId);
+  }, [tournamentId]);
+
+  useEffect(() => {
+    // Scrub the password back out of the address bar/history once it's
+    // been picked up above — it's done its job as a one-time handoff.
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('adminPassword')) return;
+    params.delete('adminPassword');
+    const search = params.toString();
+    window.history.replaceState({}, '', window.location.pathname + (search ? `?${search}` : ''));
+  }, []);
+
+  async function handleCopy(text: string) {
+    const copied = await copyToClipboard(text);
+    setStatus(copied ? 'Link copied.' : "Couldn't copy — select the link above and copy manually.");
+  }
+
+  async function deleteCourt(courtIdToDelete: string) {
+    const res = await fetch(`/api/courts/${courtIdToDelete}`, {
+      method: 'DELETE',
+      headers: { 'x-admin-password': adminPassword },
+    });
+
+    if (!res.ok) {
+      setStatus((await res.json()).error ?? 'Failed to remove court.');
+      return;
+    }
+    setStatus('Court removed.');
+    void refreshCourts();
+  }
+
   async function refreshMatches() {
-    if (!adminPassword) return;
-    const res = await fetch('/api/matches', { headers: { 'x-admin-password': adminPassword } });
-    if (res.ok) setMatches(await res.json());
+    if (!adminPassword || !tournamentId) return;
+    const res = await fetch(`/api/matches?tournamentId=${encodeURIComponent(tournamentId)}`, {
+      headers: { 'x-admin-password': adminPassword },
+    });
+    if (res.ok) {
+      const response = (await res.json()) as MatchSummaryResponse[];
+      const summaries = await Promise.all(
+        response.map(async (match) => {
+          if (!needsMatchDetail(match)) return normalizeMatchSummary(match);
+          const detail = await fetch(`/api/matches/${match.matchId}`);
+          return detail.ok
+            ? summaryFromMatchState((await detail.json()) as MatchStatePayload)
+            : normalizeMatchSummary(match);
+        }),
+      );
+      setMatches(summaries);
+    }
   }
 
   async function refreshCourts() {
-    if (!adminPassword) return;
-    const res = await fetch('/api/courts', { headers: { 'x-admin-password': adminPassword } });
+    if (!adminPassword || !tournamentId) return;
+    const res = await fetch(`/api/courts?tournamentId=${encodeURIComponent(tournamentId)}`, {
+      headers: { 'x-admin-password': adminPassword },
+    });
     if (res.ok) setCourts(await res.json());
   }
 
   useEffect(() => {
     void refreshMatches();
     void refreshCourts();
+    const refreshInterval = window.setInterval(() => void refreshMatches(), 5_000);
+    return () => window.clearInterval(refreshInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-fetch whenever the password changes
   }, [adminPassword]);
 
@@ -86,7 +209,7 @@ export function AdminDashboard() {
     const res = await fetch('/api/courts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-admin-password': adminPassword },
-      body: JSON.stringify({ label: newCourtLabel }),
+      body: JSON.stringify({ label: newCourtLabel, tournamentId }),
     });
 
     if (!res.ok) {
@@ -127,7 +250,8 @@ export function AdminDashboard() {
         // unreachable today. Falling back to 'standard' here is a safe
         // placeholder for when that form lands, not dead code to delete.
         scoringConfig: preset === 'custom' ? SCORING_PRESETS.standard : SCORING_PRESETS[preset],
-        ...(courtId ? { courtId } : {}),
+        courtId,
+        tournamentId,
       }),
     });
 
@@ -137,149 +261,278 @@ export function AdminDashboard() {
     }
     const created = (await res.json()) as { match: Match };
     setStatus('Match created.');
-    setLastCreated({ matchId: created.match.matchId, umpireLink: umpireLinkFor(created.match) });
+    setLastCreated({
+      matchId: created.match.matchId,
+      courtLabel:
+        created.match.courtLabel ??
+        courts.find((court) => court.courtId === courtId)?.label ??
+        // Only reachable if the selected court was removed from `courts`
+        // between selection and submit (another admin deleting it
+        // concurrently) — a state race, not exercised by these
+        // component-level tests, which can only pick courtId from an
+        // option that's actually rendered.
+        null,
+      umpireLink: umpireLinkFor(created.match),
+      umpireCode: created.match.umpireCode,
+    });
     setNames({ a1: '', a2: '', b1: '', b2: '' });
     void refreshMatches();
-    if (courtId) void refreshCourts();
+    void refreshCourts();
   }
 
   return (
     <main className="admin-dashboard">
-      <h1>Courtside Scoreboard — Admin</h1>
-
-      <label>
-        Admin password
-        <input
-          type="password"
-          value={adminPassword}
-          onChange={(e) => setAdminPassword(e.target.value)}
-        />
-      </label>
-
-      <form onSubmit={createCourt}>
-        <fieldset>
-          <legend>Add a court</legend>
-          <input
-            placeholder="Court label (e.g. Court 1)"
-            value={newCourtLabel}
-            onChange={(e) => setNewCourtLabel(e.target.value)}
-            required
-          />
-          <button type="submit">Add court</button>
-        </fieldset>
-      </form>
-
-      <h2>Courts</h2>
-      {courts.length === 0 ? (
-        <p>No courts yet — add one above, then its TV link appears here.</p>
-      ) : (
-        <ul className="court-list">
-          {courts.map((c) => (
-            <li key={c.courtId}>
-              <span>{c.label}</span>
-              <label>
-                TV link
-                <input readOnly value={tvLinkFor(c)} onFocus={(e) => e.target.select()} />
-              </label>
-              <button type="button" onClick={() => void copyToClipboard(tvLinkFor(c))}>
-                Copy
-              </button>
-            </li>
-          ))}
-        </ul>
+      <h1>{tournamentName || 'Tournament'} — Admin</h1>
+      {tournamentDate && (
+        <p className="tournament-date">{new Date(tournamentDate).toLocaleDateString()}</p>
       )}
 
-      <form onSubmit={createMatch}>
-        <fieldset>
-          <legend>Create match</legend>
+      {!tournamentId && (
+        <p className="field-error">Select a tournament in the desktop launcher first.</p>
+      )}
 
-          <label>
-            Match type
-            <select value={matchType} onChange={(e) => setMatchType(e.target.value as MatchType)}>
-              <option value="singles">Singles</option>
-              <option value="doubles">Doubles</option>
-            </select>
-          </label>
-
-          <label>
-            Scoring format
-            <select value={preset} onChange={(e) => setPreset(e.target.value as ScoringPresetName)}>
-              <option value="standard">Standard (21 / 30 / 11)</option>
-              <option value="short">Short (15 / 21 / 8)</option>
-            </select>
-          </label>
-
-          <label>
-            Court (optional — can assign later)
-            <select value={courtId} onChange={(e) => setCourtId(e.target.value)}>
-              <option value="">Not assigned yet</option>
-              {courts.map((c) => (
-                <option key={c.courtId} value={c.courtId}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
+      {showPasswordField && (
+        <label>
+          Admin password
           <input
-            placeholder="Side A player 1"
-            value={names.a1}
-            onChange={(e) => setNames({ ...names, a1: e.target.value })}
-            required
+            type="password"
+            value={adminPassword}
+            onChange={(e) => setAdminPassword(e.target.value)}
           />
-          {matchType === 'doubles' && (
-            <input
-              placeholder="Side A player 2"
-              value={names.a2}
-              onChange={(e) => setNames({ ...names, a2: e.target.value })}
-              required
-            />
-          )}
-          <input
-            placeholder="Side B player 1"
-            value={names.b1}
-            onChange={(e) => setNames({ ...names, b1: e.target.value })}
-            required
-          />
-          {matchType === 'doubles' && (
-            <input
-              placeholder="Side B player 2"
-              value={names.b2}
-              onChange={(e) => setNames({ ...names, b2: e.target.value })}
-              required
-            />
-          )}
+        </label>
+      )}
 
-          <button type="submit">Create match</button>
-        </fieldset>
-      </form>
+      {tournamentId && (
+        <div className="admin-grid">
+          <section className="admin-card">
+            <form onSubmit={createCourt}>
+              <fieldset>
+                <legend>Add a court</legend>
+                <input
+                  placeholder="Court label (e.g. Court 1)"
+                  value={newCourtLabel}
+                  onChange={(e) => setNewCourtLabel(e.target.value)}
+                  required
+                />
+                <button type="submit">Add court</button>
+              </fieldset>
+            </form>
 
-      {status && <p role="status">{status}</p>}
+            <h2>Courts</h2>
+            {courts.length === 0 ? (
+              <p>No courts yet — add one above, then its TV link appears here.</p>
+            ) : (
+              <ul className="court-list">
+                {courts.map((c) => (
+                  <li key={c.courtId}>
+                    <div className="court-header">
+                      <span>{c.label}</span>
+                      <span className="status-tag">{c.currentMatchId ? 'Live' : 'Idle'}</span>
+                    </div>
+                    <span>
+                      Code on <a href="/tv">/tv</a>:{' '}
+                      <strong className="join-code">{c.tvCode}</strong>
+                    </span>
+                    <label>
+                      TV link
+                      <input readOnly value={tvLinkFor(c)} onFocus={(e) => e.target.select()} />
+                    </label>
+                    <div className="inline-actions">
+                      <button type="button" onClick={() => void handleCopy(tvLinkFor(c))}>
+                        Copy
+                      </button>
+                      <button
+                        type="button"
+                        className="danger-button"
+                        onClick={() => void deleteCourt(c.courtId)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
 
-      {lastCreated && (
-        <div className="created-match-links">
-          <p>
-            Umpire link for <strong>{lastCreated.matchId}</strong> — give this only to the umpire,
-            it won&rsquo;t be shown again:
-          </p>
-          <label>
-            Umpire link
-            <input readOnly value={lastCreated.umpireLink} onFocus={(e) => e.target.select()} />
-          </label>
-          <button type="button" onClick={() => void copyToClipboard(lastCreated.umpireLink)}>
-            Copy
-          </button>
+          <section className="admin-card">
+            <form onSubmit={createMatch}>
+              <fieldset>
+                <legend>Create match</legend>
+
+                <label>
+                  Match type
+                  <select
+                    value={matchType}
+                    onChange={(e) => setMatchType(e.target.value as MatchType)}
+                  >
+                    <option value="singles">Singles</option>
+                    <option value="doubles">Doubles</option>
+                  </select>
+                </label>
+
+                <label>
+                  Scoring format
+                  <select
+                    value={preset}
+                    onChange={(e) => setPreset(e.target.value as ScoringPresetName)}
+                  >
+                    <option value="standard">Standard (21 / 30 / 11)</option>
+                    <option value="short">Short (15 / 21 / 8)</option>
+                  </select>
+                </label>
+
+                <label>
+                  Court
+                  <select value={courtId} onChange={(e) => setCourtId(e.target.value)} required>
+                    <option value="">Choose court</option>
+                    {courts.map((c) => (
+                      <option key={c.courtId} value={c.courtId}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="match-player-fields">
+                  <label>
+                    Side A player 1
+                    <input
+                      placeholder="Side A player 1"
+                      value={names.a1}
+                      onChange={(e) => setNames({ ...names, a1: e.target.value })}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Side B player 1
+                    <input
+                      placeholder="Side B player 1"
+                      value={names.b1}
+                      onChange={(e) => setNames({ ...names, b1: e.target.value })}
+                      required
+                    />
+                  </label>
+                  {matchType === 'doubles' && (
+                    <>
+                      <label>
+                        Side A player 2
+                        <input
+                          placeholder="Side A player 2"
+                          value={names.a2}
+                          onChange={(e) => setNames({ ...names, a2: e.target.value })}
+                          required
+                        />
+                      </label>
+                      <label>
+                        Side B player 2
+                        <input
+                          placeholder="Side B player 2"
+                          value={names.b2}
+                          onChange={(e) => setNames({ ...names, b2: e.target.value })}
+                          required
+                        />
+                      </label>
+                    </>
+                  )}
+                </div>
+
+                <button type="submit">Create match</button>
+              </fieldset>
+            </form>
+
+            {status && <p role="status">{status}</p>}
+
+            {lastCreated && (
+              <div className="created-match-links">
+                <p>Umpire access — give this only to the umpire, it won&rsquo;t be shown again:</p>
+                <p>
+                  Assigned court: <strong>{lastCreated.courtLabel ?? 'Court unavailable'}</strong>
+                </p>
+                <p>
+                  Code on <a href="/umpire">/umpire</a>:{' '}
+                  <strong className="join-code">{lastCreated.umpireCode}</strong>
+                </p>
+                <label>
+                  Umpire link
+                  <input
+                    readOnly
+                    value={lastCreated.umpireLink}
+                    onFocus={(e) => e.target.select()}
+                  />
+                </label>
+                <button type="button" onClick={() => void handleCopy(lastCreated.umpireLink)}>
+                  Copy
+                </button>
+              </div>
+            )}
+          </section>
         </div>
       )}
 
-      <h2>Matches</h2>
-      <ul>
-        {matches.map((m) => (
-          <li key={m.matchId}>
-            {m.matchId} — {m.matchType} — {m.status}
-          </li>
-        ))}
-      </ul>
+      {tournamentId && (
+        <>
+          <h2>Match history</h2>
+          <ul className="history-list">
+            {matches.length === 0 ? (
+              <li className="empty-state">No matches yet.</li>
+            ) : (
+              matches.map((m) =>
+                (() => {
+                  const courtName =
+                    m.courtLabel ??
+                    courts.find((court) => court.courtId === m.assignedCourtId)?.label ??
+                    'Court';
+                  const duration = formatDuration(m.startedAt, m.completedAt);
+                  return (
+                    <li key={m.matchId}>
+                      <div className="history-topline">
+                        <strong>{m.matchType}</strong>
+                        <span className="status-tag">{displayStatus(m)}</span>
+                      </div>
+                      <small>
+                        {courtName} · {new Date(m.createdAt).toLocaleString()}
+                        {duration && ` · ${duration}`}
+                      </small>
+                      <div className="tv-scoreboard history-scoreboard" aria-label="Match score">
+                        <div className="tv-set-labels" aria-hidden="true">
+                          <span />
+                          {m.derived.sets.map((set) => (
+                            <span key={set.setNumber} className={set.winner ? '' : 'current-set'}>
+                              Set {set.setNumber}
+                            </span>
+                          ))}
+                        </div>
+                        {(['A', 'B'] as const).map((side) => {
+                          const names = m.players
+                            .filter((player) => player.side === side)
+                            .map((player) => player.name)
+                            .join(' / ');
+                          return (
+                            <div
+                              className={`tv-player-row side-${side.toLowerCase()}${m.derived.matchWinner === side ? ' match-winner' : ''}`}
+                              key={side}
+                            >
+                              <strong className="tv-player-name">{names || `Side ${side}`}</strong>
+                              {m.derived.sets.map((set) => (
+                                <strong
+                                  key={set.setNumber}
+                                  className={`${set.winner ? '' : 'current-set'}${set.winner === side ? ' set-score-winner' : ''}`}
+                                >
+                                  {side === 'A' ? set.scoreA : set.scoreB}
+                                </strong>
+                              ))}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </li>
+                  );
+                })(),
+              )
+            )}
+          </ul>
+        </>
+      )}
     </main>
   );
 }

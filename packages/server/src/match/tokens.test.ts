@@ -1,4 +1,4 @@
-import { generateEventId, generateUmpireToken } from './tokens.js';
+import { generateEventId, generateJoinCode, generateUmpireToken } from './tokens.js';
 
 describe('generateUmpireToken', () => {
   it('produces a non-trivial, base64url-safe string', () => {
@@ -21,5 +21,20 @@ describe('generateEventId', () => {
 
   it('produces a different id on every call', () => {
     expect(generateEventId()).not.toBe(generateEventId());
+  });
+});
+
+describe('generateJoinCode', () => {
+  it('produces a 6-character code from the unambiguous alphabet', () => {
+    expect(generateJoinCode()).toMatch(/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/);
+  });
+
+  it('excludes visually ambiguous characters', () => {
+    const codes = Array.from({ length: 200 }, () => generateJoinCode()).join('');
+    expect(codes).not.toMatch(/[0O1IL]/);
+  });
+
+  it('produces a different code on every call', () => {
+    expect(generateJoinCode()).not.toBe(generateJoinCode());
   });
 });

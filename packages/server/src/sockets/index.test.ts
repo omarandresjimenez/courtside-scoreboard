@@ -3,6 +3,7 @@ import { AddressInfo } from 'node:net';
 import { Server as SocketIoServer } from 'socket.io';
 import { io as ioClient, type Socket as ClientSocket } from 'socket.io-client';
 import { SERVER_EVENTS, TV_EVENTS, UMPIRE_EVENTS } from '@courtside/shared';
+import { Prisma } from '../../generated/prisma/index.js';
 import { createFakePrisma } from '../testUtils/fakePrisma.js';
 
 const mockPrisma = createFakePrisma();
@@ -10,15 +11,16 @@ jest.mock('../db/client.js', () => ({ prisma: mockPrisma.prisma }));
 
 // After the mock, so registerSocketHandlers (and the replay engine it
 // calls) resolve '../db/client.js' to the fake above.
-import { registerSocketHandlers } from './index.js';
+import { createScoreEventIdempotent, registerSocketHandlers, roomForCourt } from './index.js';
 
 let httpServer: HttpServer;
+let io: SocketIoServer;
 let port: number;
 const openSockets: ClientSocket[] = [];
 
 beforeAll(async () => {
   httpServer = createServer();
-  const io = new SocketIoServer(httpServer);
+  io = new SocketIoServer(httpServer);
   registerSocketHandlers(io);
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
   port = (httpServer.address() as AddressInfo).port;
@@ -69,9 +71,33 @@ describe('umpire connections', () => {
   });
 });
 
+describe('createScoreEventIdempotent', () => {
+  it('rethrows errors that are not a duplicate eventId', async () => {
+    const dbError = new Prisma.PrismaClientKnownRequestError('Foreign key constraint failed', {
+      code: 'P2003',
+      clientVersion: 'test',
+    });
+    mockPrisma.prisma.scoreEvent.create.mockRejectedValueOnce(dbError);
+
+    await expect(
+      createScoreEventIdempotent({
+        matchId: 'm1',
+        eventId: 'ev-1',
+        type: 'POINT',
+        side: 'A',
+        timestamp: BigInt(1),
+      }),
+    ).rejects.toBe(dbError);
+  });
+});
+
 describe('scoring over the socket', () => {
   it('applies ADD_POINT and broadcasts the updated state to the room', async () => {
     const match = mockPrisma.seedMatch({ umpireToken: 'tok' });
+    mockPrisma.seedEvent(match.id, {
+      type: 'START_SET',
+      payload: JSON.stringify({ firstServerSide: 'A' }),
+    });
     const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok' });
     await waitFor(umpire, SERVER_EVENTS.MATCH_STATE); // initial state on join
 
@@ -85,6 +111,256 @@ describe('scoring over the socket', () => {
     expect(updated.derived.currentSet.scoreA).toBe(1);
     expect(mockPrisma.prisma.scoreEvent.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ type: 'POINT', side: 'A' }) }),
+    );
+  });
+
+  it('treats a replayed (duplicate) eventId as a safe no-op instead of crashing', async () => {
+    // The doc comment on ScoreEvent.eventId promises exactly this: an
+    // offline-queued umpire action retried after reconnecting must be safe
+    // to replay, not take the whole server down.
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-dup' });
+    mockPrisma.seedEvent(match.id, {
+      type: 'START_SET',
+      payload: JSON.stringify({ firstServerSide: 'A' }),
+    });
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-dup' });
+    await waitFor(umpire, SERVER_EVENTS.MATCH_STATE);
+
+    const firstUpdate = waitFor<{ derived: { currentSet: { scoreA: number } } }>(
+      umpire,
+      SERVER_EVENTS.MATCH_STATE,
+    );
+    umpire.emit(UMPIRE_EVENTS.ADD_POINT, { matchId: match.id, eventId: 'dup-ev', side: 'A' });
+    expect((await firstUpdate).derived.currentSet.scoreA).toBe(1);
+
+    const secondUpdate = waitFor<{ derived: { currentSet: { scoreA: number } } }>(
+      umpire,
+      SERVER_EVENTS.MATCH_STATE,
+    );
+    umpire.emit(UMPIRE_EVENTS.ADD_POINT, { matchId: match.id, eventId: 'dup-ev', side: 'A' });
+    expect((await secondUpdate).derived.currentSet.scoreA).toBe(1);
+  });
+
+  it('records and broadcasts the umpire-selected opening server', async () => {
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-start', matchType: 'doubles' });
+    mockPrisma.seedPlayers(match.id, [
+      { side: 'A', name: 'Alice', shortName: 'ALI' },
+      { side: 'A', name: 'Ava', shortName: 'AVA' },
+      { side: 'B', name: 'Bilal', shortName: 'BIL' },
+      { side: 'B', name: 'Bea', shortName: 'BEA' },
+    ]);
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-start' });
+    const initial = await waitFor<{
+      match: { players: Array<{ playerId: string; side: string }> };
+    }>(umpire, SERVER_EVENTS.MATCH_STATE);
+    const aPlayers = initial.match.players.filter((player) => player.side === 'A');
+    const bPlayers = initial.match.players.filter((player) => player.side === 'B');
+    const update = waitFor<{ derived: { serve: { servingSide: string; serverPlayerId: string } } }>(
+      umpire,
+      SERVER_EVENTS.MATCH_STATE,
+    );
+
+    umpire.emit(UMPIRE_EVENTS.START_SET, {
+      matchId: match.id,
+      eventId: 'ev-start',
+      firstServerSide: 'A',
+      firstServerPlayerId: aPlayers[0]!.playerId,
+      courtPositions: {
+        A: { right: aPlayers[0]!.playerId, left: aPlayers[1]!.playerId },
+        B: { right: bPlayers[0]!.playerId, left: bPlayers[1]!.playerId },
+      },
+    });
+
+    const state = await update;
+    expect(state.derived.serve).toMatchObject({
+      servingSide: 'A',
+      serverPlayerId: aPlayers[0]!.playerId,
+    });
+    expect(mockPrisma.prisma.match.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'IN_PROGRESS' }) }),
+    );
+  });
+
+  it('rejects ADD_POINT before the opening server has been set', async () => {
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-noserve' });
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-noserve' });
+    await waitFor(umpire, SERVER_EVENTS.MATCH_STATE);
+
+    const errorPromise = waitFor<{ message: string }>(umpire, SERVER_EVENTS.ERROR);
+    umpire.emit(UMPIRE_EVENTS.ADD_POINT, { matchId: match.id, eventId: 'ev-early', side: 'A' });
+    const error = await errorPromise;
+
+    expect(error.message).toMatch(/opening server/i);
+  });
+
+  it('rejects START_SET once service has already been set for the match', async () => {
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-already' });
+    mockPrisma.seedEvent(match.id, {
+      type: 'START_SET',
+      payload: JSON.stringify({ firstServerSide: 'A' }),
+    });
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-already' });
+    await waitFor(umpire, SERVER_EVENTS.MATCH_STATE);
+
+    const errorPromise = waitFor<{ message: string }>(umpire, SERVER_EVENTS.ERROR);
+    umpire.emit(UMPIRE_EVENTS.START_SET, {
+      matchId: match.id,
+      eventId: 'ev-restart',
+      firstServerSide: 'B',
+      firstServerPlayerId: 'whoever',
+    });
+    const error = await errorPromise;
+
+    expect(error.message).toMatch(/already been set/i);
+  });
+
+  it('rejects START_SET when the chosen player is not on the declared serving side', async () => {
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-badserver' });
+    mockPrisma.seedPlayers(match.id, [
+      { side: 'A', name: 'Alice', shortName: 'ALI' },
+      { side: 'B', name: 'Bilal', shortName: 'BIL' },
+    ]);
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-badserver' });
+    const state = await waitFor<{ match: { players: Array<{ playerId: string; side: string }> } }>(
+      umpire,
+      SERVER_EVENTS.MATCH_STATE,
+    );
+    const bilal = state.match.players.find((player) => player.side === 'B')!;
+
+    const errorPromise = waitFor<{ message: string }>(umpire, SERVER_EVENTS.ERROR);
+    umpire.emit(UMPIRE_EVENTS.START_SET, {
+      matchId: match.id,
+      eventId: 'ev-mismatch',
+      firstServerSide: 'A',
+      firstServerPlayerId: bilal.playerId, // Bilal is on side B, not A
+    });
+    const error = await errorPromise;
+
+    expect(error.message).toMatch(/serving side/i);
+  });
+
+  it('rejects a doubles START_SET missing valid court positions', async () => {
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-doubles', matchType: 'doubles' });
+    mockPrisma.seedPlayers(match.id, [
+      { side: 'A', name: 'Alice', shortName: 'ALI' },
+      { side: 'A', name: 'Ava', shortName: 'AVA' },
+      { side: 'B', name: 'Bilal', shortName: 'BIL' },
+      { side: 'B', name: 'Bea', shortName: 'BEA' },
+    ]);
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-doubles' });
+    const state = await waitFor<{ match: { players: Array<{ playerId: string; side: string }> } }>(
+      umpire,
+      SERVER_EVENTS.MATCH_STATE,
+    );
+    const alice = state.match.players.find((player) => player.side === 'A')!;
+
+    const errorPromise = waitFor<{ message: string }>(umpire, SERVER_EVENTS.ERROR);
+    umpire.emit(UMPIRE_EVENTS.START_SET, {
+      matchId: match.id,
+      eventId: 'ev-doubles-bad',
+      firstServerSide: 'A',
+      firstServerPlayerId: alice.playerId,
+      // courtPositions omitted entirely — doubles requires both sides set.
+    });
+    const error = await errorPromise;
+
+    expect(error.message).toMatch(/court positions/i);
+  });
+
+  it('no-ops START_SET if the match vanished between authorizing and the action running', async () => {
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-vanish-start' });
+    mockPrisma.seedPlayers(match.id, [
+      { side: 'A', name: 'Alice', shortName: 'ALI' },
+      { side: 'B', name: 'Bilal', shortName: 'BIL' },
+    ]);
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-vanish-start' });
+    const initial = await waitFor<{
+      match: { players: Array<{ playerId: string; side: string }> };
+    }>(umpire, SERVER_EVENTS.MATCH_STATE);
+    const alice = initial.match.players.find((player) => player.side === 'A')!;
+
+    await mockPrisma.prisma.match.delete({ where: { id: match.id } });
+    mockPrisma.prisma.scoreEvent.create.mockClear();
+
+    umpire.emit(UMPIRE_EVENTS.START_SET, {
+      matchId: match.id,
+      eventId: 'ev-vanish-start',
+      firstServerSide: 'A',
+      firstServerPlayerId: alice.playerId,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(mockPrisma.prisma.scoreEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('no-ops the post-action state refresh if the match vanished during the write', async () => {
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-vanish-refresh' });
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-vanish-refresh' });
+    await waitFor(umpire, SERVER_EVENTS.MATCH_STATE);
+
+    await mockPrisma.prisma.match.delete({ where: { id: match.id } });
+
+    const errorPromise = waitFor<{ message: string }>(umpire, SERVER_EVENTS.ERROR);
+    umpire.emit(UMPIRE_EVENTS.ADD_POINT, {
+      matchId: match.id,
+      eventId: 'ev-vanish-add',
+      side: 'A',
+    });
+
+    // addPoint's own guard fires first ("no servingSide" once the match is
+    // gone) — the interesting assertion is that withAuthorizedMatch's own
+    // post-action loadMatchState() also comes back null and is a quiet
+    // no-op rather than a crash trying to broadcast to a deleted match.
+    await expect(errorPromise).resolves.toEqual(
+      expect.objectContaining({ message: expect.stringMatching(/opening server/i) }),
+    );
+  });
+
+  it('marks the match COMPLETED on the winning point, then IN_PROGRESS again if that point is undone', async () => {
+    // pointsToWin:1/capScore:2 is the same degenerate-but-legal config used
+    // in the shared scoring engine's own tests — 2 points closes a set.
+    const match = mockPrisma.seedMatch({
+      umpireToken: 'tok-complete',
+      pointsToWin: 1,
+      capScore: 2,
+    });
+    mockPrisma.seedEvent(match.id, {
+      type: 'START_SET',
+      timestamp: BigInt(1),
+      payload: JSON.stringify({ firstServerSide: 'A' }),
+    });
+    // Set 1: A wins 2-0. Set 2: A already at 1-0, one point from the match.
+    mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(2) });
+    mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(3) });
+    mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(4) });
+
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-complete' });
+    await waitFor(umpire, SERVER_EVENTS.MATCH_STATE);
+
+    const winUpdate = waitFor<{ derived: { matchWinner: string | null } }>(
+      umpire,
+      SERVER_EVENTS.MATCH_STATE,
+    );
+    umpire.emit(UMPIRE_EVENTS.ADD_POINT, { matchId: match.id, eventId: 'ev-winner', side: 'A' });
+    const won = await winUpdate;
+
+    expect(won.derived.matchWinner).toBe('A');
+    expect(mockPrisma.prisma.match.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'COMPLETED' }) }),
+    );
+
+    const undoUpdate = waitFor<{ derived: { matchWinner: string | null } }>(
+      umpire,
+      SERVER_EVENTS.MATCH_STATE,
+    );
+    umpire.emit(UMPIRE_EVENTS.UNDO_LAST_POINT, { matchId: match.id, eventId: 'ev-undo-win' });
+    const reopened = await undoUpdate;
+
+    expect(reopened.derived.matchWinner).toBeNull();
+    expect(mockPrisma.prisma.match.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'IN_PROGRESS', completedAt: null }),
+      }),
     );
   });
 
@@ -102,6 +378,31 @@ describe('scoring over the socket', () => {
     const updated = await updatePromise;
 
     expect(updated.derived.currentSet.scoreB).toBe(0);
+  });
+
+  it('applies RESUME_FROM_INTERVAL and broadcasts the cleared interval flag', async () => {
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok4' });
+    for (let i = 0; i < 11; i += 1) {
+      mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(i + 1) });
+    }
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok4' });
+    const initial = await waitFor<{ derived: { onInterval: boolean } }>(
+      umpire,
+      SERVER_EVENTS.MATCH_STATE,
+    );
+    expect(initial.derived.onInterval).toBe(true);
+
+    const updatePromise = waitFor<{ derived: { onInterval: boolean } }>(
+      umpire,
+      SERVER_EVENTS.MATCH_STATE,
+    );
+    umpire.emit(UMPIRE_EVENTS.RESUME_FROM_INTERVAL, { matchId: match.id, eventId: 'ev-resume' });
+    const updated = await updatePromise;
+
+    expect(updated.derived.onInterval).toBe(false);
+    expect(mockPrisma.prisma.scoreEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ type: 'RESUME_INTERVAL' }) }),
+    );
   });
 
   it('rejects a scoring attempt from a socket that never authorized for that match', async () => {
@@ -140,6 +441,7 @@ describe('TV / court subscriptions', () => {
     const socket = connect({ role: 'tv', courtId: court.id });
     const state = await waitFor<{ match: { matchId: string } }>(socket, SERVER_EVENTS.MATCH_STATE);
     expect(state.match.matchId).toBe(match.id);
+    expect(io.sockets.adapter.rooms.get(roomForCourt(court.id))?.size).toBe(1);
   });
 
   it('also supports subscribing to a court explicitly via SUBSCRIBE_COURT', async () => {

@@ -1,6 +1,15 @@
 import { useParams } from 'react-router-dom';
 import { useMatchState } from '../lib/useMatchState.js';
 
+function formatElapsedTime(startedAt: string | null, completedAt: string | null): string | null {
+  if (!startedAt) return null;
+  const endTime = completedAt ? Date.parse(completedAt) : Date.now();
+  const elapsedSeconds = Math.max(0, Math.round((endTime - Date.parse(startedAt)) / 1000));
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+  return `${minutes} min ${seconds} sec`;
+}
+
 /** Set 04's view-only broadcast-style scoreboard, tied to a court (Set 08). */
 export function TvScreen() {
   const { courtId } = useParams<{ courtId: string }>();
@@ -14,39 +23,82 @@ export function TvScreen() {
   if (!state) return <p className="screen-message">Connecting…</p>;
 
   const { match, derived } = state;
+  const scoreSets = derived.matchWinner
+    ? derived.sets
+    : [
+        ...derived.sets.filter((set) => set.setNumber !== derived.currentSet.setNumber),
+        derived.currentSet,
+      ];
   const playerName = (side: 'A' | 'B') =>
     match.players
       .filter((p) => p.side === side)
-      .map((p) => p.shortName)
+      .map((p) => p.name.split(/\s+/)[0] || p.shortName)
       .join(' / ') || side;
+  const serverPlayer =
+    derived.serve.serverPlayerId &&
+    match.players.find((player) => player.playerId === derived.serve.serverPlayerId);
+  const servingPlayerName = (side: 'A' | 'B') => {
+    if (derived.serve.servingSide !== side) return null;
+    return serverPlayer ? serverPlayer.name.split(/\s+/)[0] : playerName(side);
+  };
 
   return (
     <main className="tv-screen">
       {isFromCache && <p className="banner">Reconnecting — showing last known score</p>}
 
-      {derived.matchWinner ? (
-        <h1>{playerName(derived.matchWinner)} wins the match</h1>
-      ) : (
-        <>
-          <div className="tv-score">
-            <span>{playerName('A')}</span>
-            <span className="tv-score-number">{derived.currentSet.scoreA}</span>
-            <span className="tv-score-number">{derived.currentSet.scoreB}</span>
-            <span>{playerName('B')}</span>
-          </div>
-          {derived.onInterval && <p className="banner">Interval</p>}
-        </>
-      )}
+      <div className="tv-header">
+        <span className="summary-pill">{match.matchType}</span>
+        <span className="summary-pill">{match.courtLabel ?? 'Court'}</span>
+        <time className="summary-pill">
+          {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </time>
+      </div>
 
-      <ol className="set-history">
-        {derived.sets
-          .filter((set) => set.winner)
-          .map((set) => (
-            <li key={set.setNumber}>
-              Set {set.setNumber}: {set.scoreA}–{set.scoreB}
-            </li>
+      <div className="tv-scoreboard" aria-label="Match score">
+        <div className="tv-set-labels" aria-hidden="true">
+          <span />
+          {scoreSets.map((set) => (
+            <span key={set.setNumber} className={set.winner ? '' : 'current-set'}>
+              Set {set.setNumber}
+            </span>
           ))}
-      </ol>
+        </div>
+        {(['A', 'B'] as const).map((side) => (
+          <div
+            className={`tv-player-row side-${side.toLowerCase()}${derived.matchWinner === side ? ' match-winner' : ''}`}
+            key={side}
+          >
+            <span className="tv-player-name">
+              {playerName(side)}
+              {!derived.matchWinner && servingPlayerName(side) && (
+                <strong className="serve-marker">Serving</strong>
+              )}
+            </span>
+            {scoreSets.map((set) => (
+              <strong
+                key={set.setNumber}
+                className={`${set.winner ? '' : 'current-set'}${set.winner === side ? ' set-score-winner' : ''}`}
+              >
+                {side === 'A' ? set.scoreA : set.scoreB}
+              </strong>
+            ))}
+          </div>
+        ))}
+      </div>
+
+      {derived.matchWinner ? (
+        <section className="match-complete" aria-live="polite">
+          <h1>{playerName(derived.matchWinner)} wins the match</h1>
+          {formatElapsedTime(match.startedAt, match.completedAt) && (
+            <p>Match time {formatElapsedTime(match.startedAt, match.completedAt)}</p>
+          )}
+          <button type="button" onClick={() => window.location.reload()}>
+            Refresh display
+          </button>
+        </section>
+      ) : (
+        derived.onInterval && <p className="banner">Interval</p>
+      )}
     </main>
   );
 }

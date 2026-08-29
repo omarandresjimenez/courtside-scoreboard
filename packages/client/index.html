@@ -3,10 +3,74 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a0e1a" />
     <title>Courtside Scoreboard</title>
   </head>
   <body>
     <div id="root"></div>
+    <div
+      id="boot-error"
+      style="
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        overflow: auto;
+        box-sizing: border-box;
+        padding: 2rem;
+        background: #0a0e1a;
+        color: #f1f5f9;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      "
+    >
+      <h1 style="margin-top: 0; font-size: 1.4rem; color: #f87171">This screen hit an error</h1>
+      <p
+        id="boot-error-message"
+        style="font-size: 1.05rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word"
+      ></p>
+      <p style="color: #94a3b8; font-size: 0.9rem">
+        Reload this page. If this keeps happening, this browser may be too old for this app — try a
+        different device or a newer browser.
+      </p>
+    </div>
+    <script>
+      // Plain, non-module script — still runs even if this browser can't
+      // load the module bundle below, which is the one place a TV device
+      // with no dev tools can find out what actually went wrong. Kept in
+      // old-style JS (var, function expressions) on purpose: the browsers
+      // most likely to need this are the ones that choke on newer syntax.
+      (function () {
+        var shown = false;
+
+        function showBootError(message) {
+          if (shown) return;
+          shown = true;
+          var messageEl = document.getElementById('boot-error-message');
+          var overlayEl = document.getElementById('boot-error');
+          if (messageEl) messageEl.textContent = message;
+          if (overlayEl) overlayEl.style.display = 'block';
+        }
+
+        window.onerror = function (message, source, lineno, colno, error) {
+          showBootError((error && error.stack) || message + ' (' + source + ':' + lineno + ')');
+        };
+
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason;
+          showBootError((reason && (reason.stack || reason.message)) || String(reason));
+        });
+
+        window.setTimeout(function () {
+          var root = document.getElementById('root');
+          if (!shown && root && root.childNodes.length === 0) {
+            showBootError(
+              'The app never started, and nothing threw an error — this browser likely ' +
+                "doesn't support modern JavaScript (ES modules), which this app requires.",
+            );
+          }
+        }, 5000);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

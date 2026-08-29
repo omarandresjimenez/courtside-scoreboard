@@ -1,5 +1,6 @@
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { MatchStatePayload } from '@courtside/shared';
 import { TvScreen } from './TvScreen.js';
 
@@ -31,14 +32,31 @@ function buildState(overrides: Partial<MatchStatePayload['derived']> = {}): Matc
         { playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' },
       ],
       umpireToken: 'tok',
+      umpireCode: 'CODE01',
       assignedCourtId: 'c1',
       createdAt: new Date().toISOString(),
       startedAt: new Date().toISOString(),
       completedAt: null,
     },
     derived: {
-      sets: [{ setNumber: 1, scoreA: 0, scoreB: 0, winner: null, intervalTriggered: false }],
-      currentSet: { setNumber: 1, scoreA: 3, scoreB: 5, winner: null, intervalTriggered: false },
+      sets: [
+        {
+          setNumber: 1,
+          scoreA: 0,
+          scoreB: 0,
+          winner: null,
+          intervalTriggered: false,
+          intervalResumed: false,
+        },
+      ],
+      currentSet: {
+        setNumber: 1,
+        scoreA: 3,
+        scoreB: 5,
+        winner: null,
+        intervalTriggered: false,
+        intervalResumed: false,
+      },
       setsWon: { A: 0, B: 0 },
       matchWinner: null,
       serve: { servingSide: 'A', serverPlayerId: 'a1', courtPositions: {} },
@@ -79,13 +97,14 @@ describe('TvScreen', () => {
     expect(screen.getByText(/Waiting for a match/)).toBeInTheDocument();
   });
 
-  it('renders the live score with both players by shortName', () => {
+  it('renders the live score with player names and a serving marker', () => {
     mockUseMatchState.mockReturnValue({ state: buildState(), isFromCache: false, error: null });
     renderAt('c1');
-    expect(screen.getByText('ALI')).toBeInTheDocument();
-    expect(screen.getByText('BIL')).toBeInTheDocument();
+    expect(screen.getByText('Alice')).toBeInTheDocument();
+    expect(screen.getByText('Bilal')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.getByText('Serving')).toBeInTheDocument();
   });
 
   it('shows a reconnecting banner when rendering from the offline cache', () => {
@@ -104,30 +123,110 @@ describe('TvScreen', () => {
     expect(screen.getByText('Interval')).toBeInTheDocument();
   });
 
-  it('announces the match winner by name instead of the live score', () => {
+  it('announces the match winner by name instead of the live score', async () => {
+    const state = buildState({
+      matchWinner: 'A',
+      currentSet: {
+        setNumber: 4,
+        scoreA: 0,
+        scoreB: 0,
+        winner: null,
+        intervalTriggered: false,
+        intervalResumed: false,
+      },
+      sets: [
+        {
+          setNumber: 1,
+          scoreA: 21,
+          scoreB: 11,
+          winner: 'A',
+          intervalTriggered: true,
+          intervalResumed: true,
+        },
+        {
+          setNumber: 2,
+          scoreA: 9,
+          scoreB: 21,
+          winner: 'B',
+          intervalTriggered: true,
+          intervalResumed: true,
+        },
+        {
+          setNumber: 3,
+          scoreA: 21,
+          scoreB: 7,
+          winner: 'A',
+          intervalTriggered: true,
+          intervalResumed: true,
+        },
+      ],
+    });
+    state.match.startedAt = '2026-08-29T10:00:00.000Z';
+    state.match.completedAt = '2026-08-29T10:03:12.000Z';
     mockUseMatchState.mockReturnValue({
-      state: buildState({ matchWinner: 'A' }),
+      state,
       isFromCache: false,
       error: null,
     });
     renderAt('c1');
-    expect(screen.getByText(/ALI wins the match/)).toBeInTheDocument();
+    expect(screen.getByText(/Alice wins the match/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Match score')).toBeInTheDocument();
+    expect(screen.getByText('Set 3')).toBeInTheDocument();
+    expect(screen.queryByText('Set 4')).not.toBeInTheDocument();
+    expect(screen.getAllByText('21')[0]).toHaveClass('set-score-winner');
+    expect(screen.getAllByText('21')[1]).toHaveClass('set-score-winner');
+    expect(screen.getByText('Alice').closest('.tv-player-row')).toHaveClass('match-winner');
+    expect(screen.getByText('Match time 3 min 12 sec')).toBeInTheDocument();
+    const reloadSpy = jest.fn();
+    Object.defineProperty(window, 'location', {
+      value: { ...window.location, reload: reloadSpy },
+      configurable: true,
+      writable: true,
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh display' }));
+
+    expect(reloadSpy).toHaveBeenCalled();
   });
 
-  it('lists completed sets, skipping any set still in progress', () => {
+  it('shows completed and current set scores, highlighting the current set', () => {
     mockUseMatchState.mockReturnValue({
       state: buildState({
+        currentSet: {
+          setNumber: 2,
+          scoreA: 3,
+          scoreB: 5,
+          winner: null,
+          intervalTriggered: false,
+          intervalResumed: false,
+        },
         sets: [
-          { setNumber: 1, scoreA: 21, scoreB: 15, winner: 'A', intervalTriggered: true },
-          { setNumber: 2, scoreA: 3, scoreB: 5, winner: null, intervalTriggered: false },
+          {
+            setNumber: 1,
+            scoreA: 21,
+            scoreB: 15,
+            winner: 'A',
+            intervalTriggered: true,
+            intervalResumed: false,
+          },
+          {
+            setNumber: 2,
+            scoreA: 3,
+            scoreB: 5,
+            winner: null,
+            intervalTriggered: false,
+            intervalResumed: false,
+          },
         ],
       }),
       isFromCache: false,
       error: null,
     });
     renderAt('c1');
-    expect(screen.getByText('Set 1: 21–15')).toBeInTheDocument();
-    expect(screen.queryByText(/Set 2:/)).not.toBeInTheDocument();
+    expect(screen.getByText('Set 1')).toBeInTheDocument();
+    expect(screen.getByText('Set 2')).toBeInTheDocument();
+    expect(screen.getAllByText('21')).toHaveLength(1);
+    expect(screen.getByText('3')).toHaveClass('current-set');
   });
 
   it('falls back to the side letter when a side has no players yet', () => {
@@ -137,5 +236,35 @@ describe('TvScreen', () => {
     renderAt('c1');
     expect(screen.getByText('A')).toBeInTheDocument();
     expect(screen.getByText('B')).toBeInTheDocument();
+  });
+
+  it("falls back to a player's shortName when their given name has no usable first word", () => {
+    const state = buildState();
+    state.match.players = [
+      { playerId: 'a1', side: 'A', name: '  ', shortName: 'ALI' },
+      { playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' },
+    ];
+    mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
+    renderAt('c1');
+    expect(screen.getByText('ALI')).toBeInTheDocument();
+  });
+
+  it('omits the match duration for a winning match with no recorded start time', () => {
+    const state = buildState({ matchWinner: 'A' });
+    state.match.startedAt = null;
+    state.match.completedAt = null;
+    mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
+    renderAt('c1');
+    expect(screen.getByText(/Alice wins the match/)).toBeInTheDocument();
+    expect(screen.queryByText(/Match time/)).not.toBeInTheDocument();
+  });
+
+  it('computes the match duration against the current time when a winning match has no completedAt', () => {
+    const state = buildState({ matchWinner: 'A' });
+    state.match.startedAt = new Date().toISOString();
+    state.match.completedAt = null;
+    mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
+    renderAt('c1');
+    expect(screen.getByText(/Match time \d+ min \d+ sec/)).toBeInTheDocument();
   });
 });

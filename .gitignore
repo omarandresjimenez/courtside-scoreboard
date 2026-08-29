@@ -13,6 +13,11 @@ packages/server/prisma/dev.db
 packages/server/prisma/dev.db-journal
 *.sqlite
 *.sqlite-journal
+*.db
+*.db-journal
+
+# desktop app build output
+packages/desktop/release/
 
 # env
 .env

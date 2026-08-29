@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 1024px;
+        height: 1024px;
+        overflow: hidden;
+      }
+      .icon {
+        width: 1024px;
+        height: 1024px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(ellipse 130% 90% at 50% 0%, #16213d 0%, #0a0e1a 60%);
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      .board {
+        display: flex;
+        align-items: center;
+        gap: 64px;
+      }
+      .dot {
+        width: 360px;
+        height: 360px;
+        border-radius: 50%;
+      }
+      .dot.a {
+        background: radial-gradient(circle at 35% 30%, #7bf2ff, #22d3ee 55%, #0e7490 100%);
+        box-shadow: 0 0 140px rgba(34, 211, 238, 0.7);
+      }
+      .dot.b {
+        background: radial-gradient(circle at 35% 30%, #e8c9ff, #c084fc 55%, #7e22ce 100%);
+        box-shadow: 0 0 140px rgba(192, 132, 252, 0.7);
+      }
+      .net {
+        width: 18px;
+        height: 520px;
+        border-radius: 9px;
+        background: linear-gradient(180deg, #f1f5f9, #94a3b8);
+        opacity: 0.9;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="icon">
+      <div class="board">
+        <div class="dot a"></div>
+        <div class="net"></div>
+        <div class="dot b"></div>
+      </div>
+    </div>
+  </body>
+</html>

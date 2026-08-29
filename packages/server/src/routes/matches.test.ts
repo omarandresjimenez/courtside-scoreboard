@@ -22,7 +22,14 @@ const validSinglesBody = {
     { side: 'B', name: 'Bilal' },
   ],
   scoringConfig: { pointsToWin: 21, capScore: 30, intervalAt: 11 },
+  courtId: 'court-required',
+  tournamentId: 'tournament-required',
 };
+
+beforeEach(() => {
+  mockPrisma.seedTournament({ id: 'tournament-required' });
+  mockPrisma.seedCourt({ id: 'court-required', tournamentId: 'tournament-required' });
+});
 
 describe('POST /api/matches', () => {
   it('rejects a request with no admin password', async () => {
@@ -100,6 +107,8 @@ describe('POST /api/matches', () => {
           { side: 'B', name: 'B2' },
         ],
         scoringConfig: { pointsToWin: 21, capScore: 30, intervalAt: 11 },
+        courtId: 'court-required',
+        tournamentId: 'tournament-required',
       });
 
     expect(response.status).toBe(201);
@@ -115,7 +124,7 @@ describe('POST /api/matches', () => {
   });
 
   it('assigns the new match to a court when courtId is given', async () => {
-    const court = mockPrisma.seedCourt();
+    const court = mockPrisma.seedCourt({ tournamentId: 'tournament-required' });
 
     const response = await request(buildApp())
       .post('/api/matches')
@@ -125,6 +134,51 @@ describe('POST /api/matches', () => {
     expect(response.status).toBe(201);
     const updatedCourt = await mockPrisma.prisma.court.findUnique({ where: { id: court.id } });
     expect(updatedCourt?.currentMatchId).toBe(response.body.match.matchId);
+  });
+
+  it('rejects a match with no court assignment', async () => {
+    const { courtId: _courtId, ...bodyWithoutCourt } = validSinglesBody;
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(bodyWithoutCourt);
+
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects a match assigned to an unknown court', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({ ...validSinglesBody, courtId: 'not-a-court' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/court from this tournament/);
+  });
+});
+
+describe('GET /api/matches/resolve/:code', () => {
+  it('returns 404 for an unknown code', async () => {
+    const response = await request(buildApp()).get('/api/matches/resolve/NOPE00');
+    expect(response.status).toBe(404);
+  });
+
+  it('resolves a known umpireCode to its matchId + token, without auth', async () => {
+    const match = mockPrisma.seedMatch({ umpireCode: 'XYZ789', umpireToken: 'the-real-token' });
+
+    const response = await request(buildApp()).get('/api/matches/resolve/XYZ789');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ matchId: match.id, token: 'the-real-token' });
+  });
+
+  it('is case-insensitive, since codes are meant to be typed', async () => {
+    const match = mockPrisma.seedMatch({ umpireCode: 'LOWCASE' });
+
+    const response = await request(buildApp()).get('/api/matches/resolve/lowcase');
+
+    expect(response.status).toBe(200);
+    expect(response.body.matchId).toBe(match.id);
   });
 });
 
@@ -151,11 +205,37 @@ describe('GET /api/matches', () => {
     expect(response.status).toBe(401);
   });
 
-  it('lists matches as safe summaries, never leaking umpireToken', async () => {
-    mockPrisma.seedMatch({ umpireToken: 'super-secret-token' });
-
+  it('rejects a request missing tournamentId', async () => {
     const response = await request(buildApp())
       .get('/api/matches')
+      .set('x-admin-password', config.adminPassword);
+    expect(response.status).toBe(400);
+  });
+
+  it('silently omits a match that vanished between the list query and its detail load', async () => {
+    // Simulates a match being deleted concurrently with this request —
+    // findMany() already has its id, but loadMatchState() then finds
+    // nothing. Should degrade gracefully, not 500.
+    const survivor = mockPrisma.seedMatch({ tournamentId: 'tournament-vanishing-test' });
+    const vanished = mockPrisma.seedMatch({ tournamentId: 'tournament-vanishing-test' });
+    await mockPrisma.prisma.match.delete({ where: { id: vanished.id } });
+
+    const response = await request(buildApp())
+      .get('/api/matches?tournamentId=tournament-vanishing-test')
+      .set('x-admin-password', config.adminPassword);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([expect.objectContaining({ matchId: survivor.id })]);
+  });
+
+  it('lists matches as safe summaries, never leaking umpireToken', async () => {
+    mockPrisma.seedMatch({
+      umpireToken: 'super-secret-token',
+      tournamentId: 'tournament-required',
+    });
+
+    const response = await request(buildApp())
+      .get('/api/matches?tournamentId=tournament-required')
       .set('x-admin-password', config.adminPassword);
 
     expect(response.status).toBe(200);

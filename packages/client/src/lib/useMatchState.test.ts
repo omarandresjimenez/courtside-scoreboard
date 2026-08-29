@@ -144,6 +144,35 @@ describe('useMatchState', () => {
         UMPIRE_EVENTS.UNDO_LAST_POINT,
         expect.objectContaining({ matchId: 'm1' }),
       );
+
+      act(() => result.current.startSet('A', 'a1'));
+      expect(fakeSocket.emit).toHaveBeenCalledWith(
+        UMPIRE_EVENTS.START_SET,
+        expect.objectContaining({ matchId: 'm1', firstServerSide: 'A', firstServerPlayerId: 'a1' }),
+      );
+
+      act(() => result.current.resumeFromInterval());
+      expect(fakeSocket.emit).toHaveBeenCalledWith(
+        UMPIRE_EVENTS.RESUME_FROM_INTERVAL,
+        expect.objectContaining({ matchId: 'm1' }),
+      );
+    });
+
+    it('includes courtPositions in START_SET for a doubles match', () => {
+      const { result } = renderHook(() =>
+        useMatchState({ role: 'umpire', matchId: 'm1', token: 'tok' }, 'umpire:m1'),
+      );
+
+      act(() => result.current.startSet('A', 'a1', { A: { right: 'a1', left: 'a2' } }));
+      expect(fakeSocket.emit).toHaveBeenCalledWith(
+        UMPIRE_EVENTS.START_SET,
+        expect.objectContaining({
+          matchId: 'm1',
+          firstServerSide: 'A',
+          firstServerPlayerId: 'a1',
+          courtPositions: { A: { right: 'a1', left: 'a2' } },
+        }),
+      );
     });
 
     it('are no-ops for a tv (non-umpire) connection', () => {
@@ -151,6 +180,8 @@ describe('useMatchState', () => {
 
       act(() => result.current.addPoint('A'));
       act(() => result.current.undoLastPoint());
+      act(() => result.current.startSet('A', 'a1'));
+      act(() => result.current.resumeFromInterval());
 
       expect(fakeSocket.emit).not.toHaveBeenCalled();
     });

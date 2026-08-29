@@ -5,6 +5,12 @@
 generator client {
   provider = "prisma-client-js"
   output   = "../generated/prisma"
+  // "native" alone only ships the engine for whichever machine ran
+  // `prisma generate` — fine for the plain LAN server, but the desktop
+  // app (packages/desktop) bundles this generated client into installers
+  // built on one machine and run on another OS/CPU, so every platform it
+  // targets needs its engine binary generated here too.
+  binaryTargets = ["native", "darwin", "darwin-arm64", "windows"]
 }
 
 datasource db {
@@ -14,15 +20,33 @@ datasource db {
 
 model Court {
   id             String   @id @default(cuid())
+  tournamentId   String?
+  tournament     Tournament? @relation(fields: [tournamentId], references: [id])
   label          String
   /// The live pointer a TV screen follows; null while idle. Not a formal
   /// relation on purpose — assigning a match is a plain field update.
   currentMatchId String?
+  /// Short code typed into the /tv join screen instead of pasting the full
+  /// URL — stable for the court's lifetime, unlike Match.umpireCode.
+  tvCode         String   @unique
   createdAt      DateTime @default(now())
+
+  @@index([tournamentId])
+}
+
+model Tournament {
+  id        String   @id @default(cuid())
+  name      String
+  date      DateTime @default(now())
+  createdAt DateTime @default(now())
+  courts    Court[]
+  matches   Match[]
 }
 
 model Match {
   id              String       @id @default(cuid())
+  tournamentId    String?
+  tournament      Tournament?  @relation(fields: [tournamentId], references: [id])
   /// "singles" | "doubles"
   matchType       String
   /// "CREATED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED"
@@ -34,6 +58,9 @@ model Match {
   scoringLocked   Boolean      @default(false)
   /// Long random secret; required on every umpire write action.
   umpireToken     String       @unique
+  /// Short code typed into the /umpire join screen; resolves to this match's
+  /// id + umpireToken. Same one-time-reveal policy as umpireToken.
+  umpireCode      String       @unique
   /// Last (or current) court this match was played on — for history,
   /// distinct from Court.currentMatchId which only reflects "right now".
   assignedCourtId String?
@@ -42,6 +69,8 @@ model Match {
   completedAt     DateTime?
   players         Player[]
   events          ScoreEvent[]
+
+  @@index([tournamentId])
 }
 
 model Player {
