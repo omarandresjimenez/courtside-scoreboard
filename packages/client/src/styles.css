@@ -488,11 +488,13 @@ button.banner:active {
     font-size: 0.65rem;
   }
 
-  .match-summary-card {
+  .umpire-screen .match-summary-card {
     gap: 0.35rem;
   }
 
-  .summary-pill {
+  /* Scoped: .summary-pill is also used by the TV screen, which renders in
+     landscape too whenever someone previews a TV link on a phone. */
+  .umpire-screen .summary-pill {
     font-size: 0.68rem;
     padding: 0.14rem 0.5rem;
   }
@@ -532,7 +534,9 @@ button.banner:active {
     font-size: 0.85rem;
   }
 
-  .serve-marker {
+  /* Scoped for the same reason as .summary-pill above — the TV screen shows
+     a .serve-marker beside the serving player's name. */
+  .umpire-screen .serve-marker {
     font-size: 0.6rem;
     padding: 0.08rem 0.35rem;
   }
