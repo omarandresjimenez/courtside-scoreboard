@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Court, Match, MatchSummary } from '@courtside/shared';
+import { QRCodeSVG } from 'qrcode.react';
 import { AdminDashboard } from './AdminDashboard.js';
 
 function jsonResponse(body: unknown, ok = true) {
@@ -656,6 +657,71 @@ describe('AdminDashboard', () => {
       );
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
         'http://localhost/umpire/m-42?token=secret-tok',
+      );
+    });
+
+    // qrcode.react emits two <path>s: a plain background plate, then the
+    // encoded symbol. The plate is identical for every value, so a test that
+    // reads the first path proves nothing — always read the foreground one.
+    const symbolPath = (title: string) => {
+      const svg = screen.getByTitle(title).closest('svg')!;
+      return svg.querySelector('path[fill="#0a0e1a"]')!.getAttribute('d');
+    };
+
+    it('renders a scannable QR code for the umpire link beside the join code', async () => {
+      render(<AdminDashboard />);
+      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
+      await selectCourt();
+      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
+      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      mockFetchRoutes({
+        postMatches: jsonResponse(
+          sampleCreatedMatch({ matchId: 'm-42', umpireToken: 'secret-tok', umpireCode: 'M42CODE' }),
+        ),
+      });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      const qr = await screen.findByTitle('QR code for the umpire link to match m-42');
+      // It sits inside the same block as the code the umpire would otherwise
+      // have to type, which is the whole point of it being there.
+      const handoff = qr.closest('.umpire-handoff');
+      expect(handoff).not.toBeNull();
+      expect(handoff!.querySelector('.join-code')!).toHaveTextContent('M42CODE');
+      // A real encoded symbol, not just the background plate.
+      expect(symbolPath('QR code for the umpire link to match m-42')!.length).toBeGreaterThan(500);
+    });
+
+    it('encodes the umpire link itself, not some other value', async () => {
+      render(<AdminDashboard />);
+      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
+      await selectCourt();
+      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
+      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      mockFetchRoutes({
+        postMatches: jsonResponse(
+          sampleCreatedMatch({ matchId: 'm-42', umpireToken: 'secret-tok' }),
+        ),
+      });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+      await screen.findByTitle('QR code for the umpire link to match m-42');
+      const renderedPath = symbolPath('QR code for the umpire link to match m-42');
+
+      // Encode the link we expect independently and compare the symbols. If the
+      // dashboard ever passed the code, the match id, or a stale link instead,
+      // these would diverge.
+      const { container } = render(
+        <QRCodeSVG
+          value="http://localhost/umpire/m-42?token=secret-tok"
+          size={84}
+          bgColor="#ffffff"
+          fgColor="#0a0e1a"
+          marginSize={2}
+        />,
+      );
+      expect(renderedPath).toEqual(
+        container.querySelector('path[fill="#0a0e1a"]')!.getAttribute('d'),
       );
     });
 

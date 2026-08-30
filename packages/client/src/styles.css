@@ -459,6 +459,138 @@ button.banner:active {
   }
 }
 
+/* Landscape phone. An umpire holding a phone sideways gets ~350-430px of
+   height, and the default vertical stack needs roughly twice that — so the
+   score buttons, the only thing being tapped mid-rally, end up below the
+   fold. Here the page is pinned to the viewport, every supporting element
+   shrinks to a single compact line, and the two score buttons absorb all
+   the space that is left. Keyed on height rather than width so a tablet in
+   landscape (768px tall) keeps the roomy default layout. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .umpire-screen {
+    max-width: none;
+    height: 100vh;
+    height: 100dvh;
+    padding: 0.45rem 0.8rem 0.55rem;
+    gap: 0.4rem;
+    /* Safety valve: the pre-match service-setup form is taller than a
+       landscape phone no matter how it is compressed. */
+    overflow-y: auto;
+    animation: none;
+  }
+
+  /* Duplicates the "Set N" pill already in the summary card above it. */
+  .umpire-screen > h1 {
+    display: none;
+  }
+
+  .umpire-screen .connection-status {
+    font-size: 0.65rem;
+  }
+
+  .match-summary-card {
+    gap: 0.35rem;
+  }
+
+  .summary-pill {
+    font-size: 0.68rem;
+    padding: 0.14rem 0.5rem;
+  }
+
+  .service-callout {
+    font-size: 0.85rem;
+  }
+
+  /* The whole point of the screen: everything spare goes here. */
+  .score-row {
+    flex: 1 1 auto;
+    min-height: 5.5rem;
+    gap: 0.6rem;
+  }
+
+  .score-row button {
+    height: 100%;
+    min-height: 0;
+    padding: 0.4rem;
+    font-size: clamp(1.05rem, 4.6vh, 1.9rem);
+  }
+
+  /* Reference, not a control — one line per side. */
+  .serve-box {
+    flex-direction: row;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0.3rem 0.6rem;
+  }
+
+  .serve-box .label {
+    font-size: 0.6rem;
+  }
+
+  .serve-box strong {
+    font-size: 0.85rem;
+  }
+
+  .serve-marker {
+    font-size: 0.6rem;
+    padding: 0.08rem 0.35rem;
+  }
+
+  .umpire-actions {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .umpire-actions > button:not(.banner),
+  .umpire-screen button.banner {
+    padding: 0.35rem 0.8rem;
+    font-size: 0.85rem;
+  }
+
+  .sets-summary {
+    margin: 0;
+    font-size: 0.75rem;
+  }
+
+  /* Pre-match setup: the tallest state this screen has. Two columns of
+     player pickers instead of one stacked run gets it inside a landscape
+     phone; the side choice and the submit button keep the full width. */
+  .service-setup {
+    padding: 0.6rem 0.8rem;
+  }
+
+  .service-setup h1 {
+    font-size: 1.05rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .service-setup fieldset {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem 0.75rem;
+    align-items: end;
+  }
+
+  .service-setup legend {
+    font-size: 0.8rem;
+  }
+
+  .service-setup .side-choice,
+  .service-setup fieldset > button[type='submit'] {
+    grid-column: 1 / -1;
+  }
+
+  .service-setup label {
+    font-size: 0.8rem;
+  }
+
+  .service-setup select {
+    padding: 0.35rem 0.5rem;
+  }
+}
+
 /* ---------- TV screen ---------- */
 
 .tv-screen {
@@ -841,6 +973,59 @@ button.banner:active {
   animation: fade-in 0.3s ease;
 }
 
+/* Umpire handoff: details on the left, scannable QR on the right. Drops to
+   a single column on narrow screens via the breakpoint further down. */
+.umpire-handoff {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  /* Deliberately not flex-wrap: wrap. Flex chooses line breaks from each
+     item's hypothetical size before any shrinking happens, so wrapping would
+     push the QR onto its own line instead of letting the details column
+     narrow beside it. Narrow screens stack via the 560px query below. */
+  flex-wrap: nowrap;
+}
+
+.umpire-handoff-details {
+  /* Shrink to whatever is left beside the QR rather than claiming a fixed
+     basis — the admin card column is only ~350px, so a 22ch basis plus the
+     QR overflows and wraps the code away from the thing it belongs next to. */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Overrides the wider .created-match-links input rule, which is what forced
+   the wrap: a 22ch minimum leaves no room for the QR on the same row. */
+.umpire-handoff-details input {
+  min-width: 0;
+  width: 100%;
+}
+
+.umpire-qr {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  /* The QR itself must stay dark-on-white for scanners, so it sits on its
+     own light plate rather than inheriting the dark surface around it. */
+  background: #ffffff;
+  padding: 0.6rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+}
+
+.umpire-qr svg {
+  display: block;
+}
+
+.umpire-qr figcaption {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #0a0e1a;
+}
+
 .history-players,
 .history-set-scores {
   display: flex;
@@ -937,6 +1122,23 @@ button.banner:active {
   .created-match-links input {
     min-width: 0;
     width: 100%;
+  }
+
+  .umpire-handoff {
+    flex-direction: column;
+    /* Column direction makes flex-grow act on the vertical axis, so the
+       details block would otherwise stretch and shove the QR to the bottom
+       of the panel — away from the code it belongs next to. */
+    align-items: flex-start;
+  }
+
+  .umpire-handoff-details {
+    flex: none;
+    width: 100%;
+  }
+
+  .umpire-qr {
+    align-self: flex-start;
   }
 }
 

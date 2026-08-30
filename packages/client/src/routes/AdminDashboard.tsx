@@ -8,6 +8,7 @@ import {
   type MatchType,
   type ScoringPresetName,
 } from '@courtside/shared';
+import { QRCodeSVG } from 'qrcode.react';
 import { copyToClipboard } from '../lib/clipboard.js';
 
 interface CreatedMatchLinks {
@@ -448,18 +449,38 @@ export function AdminDashboard() {
                 <p>
                   Assigned court: <strong>{lastCreated.courtLabel ?? 'Court unavailable'}</strong>
                 </p>
-                <p>
-                  Code on <a href="/umpire">/umpire</a>:{' '}
-                  <strong className="join-code">{lastCreated.umpireCode}</strong>
-                </p>
-                <label>
-                  Umpire link
-                  <input
-                    readOnly
-                    value={lastCreated.umpireLink}
-                    onFocus={(e) => e.target.select()}
-                  />
-                </label>
+                <div className="umpire-handoff">
+                  <div className="umpire-handoff-details">
+                    <p>
+                      Code on <a href="/umpire">/umpire</a>:{' '}
+                      <strong className="join-code">{lastCreated.umpireCode}</strong>
+                    </p>
+                    <label>
+                      Umpire link
+                      <input
+                        readOnly
+                        value={lastCreated.umpireLink}
+                        onFocus={(e) => e.target.select()}
+                      />
+                    </label>
+                  </div>
+                  {/* Scanning this beats typing a 6-char code plus a token on a
+                      phone, and it works offline — the SVG is generated in the
+                      browser, not fetched from a chart API. Rendered on a white
+                      plate with dark modules regardless of the dark theme,
+                      because that is the contrast polarity scanners expect. */}
+                  <figure className="umpire-qr">
+                    <QRCodeSVG
+                      value={lastCreated.umpireLink}
+                      size={84}
+                      bgColor="#ffffff"
+                      fgColor="#0a0e1a"
+                      marginSize={2}
+                      title={`QR code for the umpire link to match ${lastCreated.matchId}`}
+                    />
+                    <figcaption>Scan to open</figcaption>
+                  </figure>
+                </div>
                 <button type="button" onClick={() => void handleCopy(lastCreated.umpireLink)}>
                   Copy
                 </button>
