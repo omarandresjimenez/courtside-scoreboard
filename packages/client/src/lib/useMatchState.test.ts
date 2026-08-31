@@ -156,6 +156,12 @@ describe('useMatchState', () => {
         UMPIRE_EVENTS.RESUME_FROM_INTERVAL,
         expect.objectContaining({ matchId: 'm1' }),
       );
+
+      act(() => result.current.retireMatch('B'));
+      expect(fakeSocket.emit).toHaveBeenCalledWith(
+        UMPIRE_EVENTS.RETIRE_MATCH,
+        expect.objectContaining({ matchId: 'm1', winnerSide: 'B' }),
+      );
     });
 
     it('includes courtPositions in START_SET for a doubles match', () => {
@@ -182,6 +188,7 @@ describe('useMatchState', () => {
       act(() => result.current.undoLastPoint());
       act(() => result.current.startSet('A', 'a1'));
       act(() => result.current.resumeFromInterval());
+      act(() => result.current.retireMatch('A'));
 
       expect(fakeSocket.emit).not.toHaveBeenCalled();
     });

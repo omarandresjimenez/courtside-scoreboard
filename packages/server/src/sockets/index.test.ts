@@ -91,6 +91,8 @@ describe('createScoreEventIdempotent', () => {
   });
 });
 
+type StatePayload = { derived: { matchWinner: string | null; finalised: boolean } };
+
 describe('scoring over the socket', () => {
   it('applies ADD_POINT and broadcasts the updated state to the room', async () => {
     const match = mockPrisma.seedMatch({ umpireToken: 'tok' });
@@ -316,51 +318,53 @@ describe('scoring over the socket', () => {
     );
   });
 
-  it('marks the match COMPLETED on the winning point, then IN_PROGRESS again if that point is undone', async () => {
-    // pointsToWin:1/capScore:2 is the same degenerate-but-legal config used
-    // in the shared scoring engine's own tests — 2 points closes a set.
-    const match = mockPrisma.seedMatch({
-      umpireToken: 'tok-complete',
-      pointsToWin: 1,
-      capScore: 2,
-    });
-    mockPrisma.seedEvent(match.id, {
-      type: 'START_SET',
-      timestamp: BigInt(1),
-      payload: JSON.stringify({ firstServerSide: 'A' }),
-    });
-    // Set 1: A wins 2-0. Set 2: A already at 1-0, one point from the match.
-    mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(2) });
-    mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(3) });
-    mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(4) });
-
-    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-complete' });
+  it('leaves a decided match IN_PROGRESS until the umpire finalises it', async () => {
+    // The scoring engine decides the winner; the umpire decides the match is
+    // over. Winning the deciding game must not close the record on its own.
+    // pointsToWin:1/capScore:2 closes a game at 2-0, so this seeds three
+    // points and plays the fourth — the one that wins the second game.
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-fin', pointsToWin: 1, capScore: 2 });
+    for (let i = 1; i <= 3; i += 1) {
+      mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(i) });
+    }
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-fin' });
     await waitFor(umpire, SERVER_EVENTS.MATCH_STATE);
 
-    const winUpdate = waitFor<{ derived: { matchWinner: string | null } }>(
-      umpire,
-      SERVER_EVENTS.MATCH_STATE,
-    );
-    umpire.emit(UMPIRE_EVENTS.ADD_POINT, { matchId: match.id, eventId: 'ev-winner', side: 'A' });
-    const won = await winUpdate;
+    const winUpdate = waitFor<StatePayload>(umpire, SERVER_EVENTS.MATCH_STATE);
+    umpire.emit(UMPIRE_EVENTS.ADD_POINT, { matchId: match.id, eventId: 'ev-win', side: 'A' });
+    const decided = await winUpdate;
 
-    expect(won.derived.matchWinner).toBe('A');
-    expect(mockPrisma.prisma.match.update).toHaveBeenCalledWith(
+    expect(decided.derived.matchWinner).toBe('A');
+    expect(decided.derived.finalised).toBe(false);
+    expect(mockPrisma.prisma.match.update).not.toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'COMPLETED' }) }),
     );
 
-    const undoUpdate = waitFor<{ derived: { matchWinner: string | null } }>(
-      umpire,
-      SERVER_EVENTS.MATCH_STATE,
-    );
-    umpire.emit(UMPIRE_EVENTS.UNDO_LAST_POINT, { matchId: match.id, eventId: 'ev-undo-win' });
-    const reopened = await undoUpdate;
-
-    expect(reopened.derived.matchWinner).toBeNull();
+    const finalPromise = waitFor<StatePayload>(umpire, SERVER_EVENTS.MATCH_STATE);
+    umpire.emit(UMPIRE_EVENTS.RETIRE_MATCH, {
+      matchId: match.id,
+      eventId: 'ev-final',
+      winnerSide: 'A',
+    });
+    expect((await finalPromise).derived.finalised).toBe(true);
     expect(mockPrisma.prisma.match.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ status: 'IN_PROGRESS', completedAt: null }),
-      }),
+      expect.objectContaining({ data: expect.objectContaining({ status: 'COMPLETED' }) }),
+    );
+  });
+
+  it('reopens a match recorded COMPLETED that no longer has a finalising event', async () => {
+    // Reconciliation for drifted data (an admin closing a match by hand, an
+    // interrupted write): the event log is the authority, not the row.
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-reopen', status: 'COMPLETED' });
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-reopen' });
+    await waitFor(umpire, SERVER_EVENTS.MATCH_STATE);
+
+    const updatePromise = waitFor(umpire, SERVER_EVENTS.MATCH_STATE);
+    umpire.emit(UMPIRE_EVENTS.ADD_POINT, { matchId: match.id, eventId: 'p-reopen', side: 'A' });
+    await updatePromise;
+
+    expect(mockPrisma.prisma.match.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'IN_PROGRESS' }) }),
     );
   });
 
@@ -403,6 +407,50 @@ describe('scoring over the socket', () => {
     expect(mockPrisma.prisma.scoreEvent.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ type: 'RESUME_INTERVAL' }) }),
     );
+  });
+
+  it('applies RETIRE_MATCH and broadcasts the awarded winner', async () => {
+    // A retirement ends the match at whatever score it had reached, which is
+    // why the winner travels in the payload instead of being derived.
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-retire' });
+    mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(1) });
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-retire' });
+    const initial = await waitFor<{ derived: { matchWinner: string | null } }>(
+      umpire,
+      SERVER_EVENTS.MATCH_STATE,
+    );
+    expect(initial.derived.matchWinner).toBeNull();
+
+    const updatePromise = waitFor<{ derived: { matchWinner: string | null } }>(
+      umpire,
+      SERVER_EVENTS.MATCH_STATE,
+    );
+    umpire.emit(UMPIRE_EVENTS.RETIRE_MATCH, {
+      matchId: match.id,
+      eventId: 'ev-retire',
+      winnerSide: 'B',
+    });
+    const updated = await updatePromise;
+
+    expect(updated.derived.matchWinner).toBe('B');
+    expect(mockPrisma.prisma.scoreEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'RETIRE', side: 'B' }),
+      }),
+    );
+  });
+
+  it('refuses to retire a match for a socket that never authorized', async () => {
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-retire2' });
+    const impostor = connect({});
+    const errorPromise = waitFor<{ message: string }>(impostor, SERVER_EVENTS.ERROR);
+    impostor.emit(UMPIRE_EVENTS.RETIRE_MATCH, {
+      matchId: match.id,
+      eventId: 'ev-x',
+      winnerSide: 'A',
+    });
+    const error = await errorPromise;
+    expect(error.message).toMatch(/Not authorized/);
   });
 
   it('rejects a scoring attempt from a socket that never authorized for that match', async () => {

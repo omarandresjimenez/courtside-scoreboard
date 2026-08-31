@@ -1,5 +1,5 @@
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { MatchStatePayload } from '@courtside/shared';
 import { TvScreen } from './TvScreen.js';
@@ -27,6 +27,7 @@ function buildState(overrides: Partial<MatchStatePayload['derived']> = {}): Matc
       status: 'IN_PROGRESS',
       scoringConfig: { pointsToWin: 21, capScore: 30, intervalAt: 11 },
       scoringLocked: true,
+      teams: { A: { name: null, country: null }, B: { name: null, country: null } },
       players: [
         { playerId: 'a1', side: 'A', name: 'Alice', shortName: 'ALI' },
         { playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' },
@@ -34,6 +35,7 @@ function buildState(overrides: Partial<MatchStatePayload['derived']> = {}): Matc
       umpireToken: 'tok',
       umpireCode: 'CODE01',
       assignedCourtId: 'c1',
+      assignedUmpireId: 'u1',
       createdAt: new Date().toISOString(),
       startedAt: new Date().toISOString(),
       completedAt: null,
@@ -61,6 +63,10 @@ function buildState(overrides: Partial<MatchStatePayload['derived']> = {}): Matc
       matchWinner: null,
       serve: { servingSide: 'A', serverPlayerId: 'a1', courtPositions: {} },
       onInterval: false,
+      interval: null,
+      serviceOver: false,
+      finalised: false,
+      retiredSide: null,
       ...overrides,
     },
   };
@@ -115,12 +121,22 @@ describe('TvScreen', () => {
 
   it('shows an interval banner when the set is on its mid-set break', () => {
     mockUseMatchState.mockReturnValue({
-      state: buildState({ onInterval: true }),
+      state: buildState({ onInterval: true, interval: { kind: 'MID_GAME', seconds: 60 } }),
       isFromCache: false,
       error: null,
     });
     renderAt('c1');
     expect(screen.getByText('Interval')).toBeInTheDocument();
+  });
+
+  it('shows a game-interval banner when the set is on its between-games break', () => {
+    mockUseMatchState.mockReturnValue({
+      state: buildState({ interval: { kind: 'BETWEEN_GAMES', seconds: 120 } }),
+      isFromCache: false,
+      error: null,
+    });
+    renderAt('c1');
+    expect(screen.getByText('Game interval')).toBeInTheDocument();
   });
 
   it('announces the match winner by name instead of the live score', async () => {
@@ -266,5 +282,62 @@ describe('TvScreen', () => {
     mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
     renderAt('c1');
     expect(screen.getByText(/Match time \d+ min \d+ sec/)).toBeInTheDocument();
+  });
+});
+
+describe('TvScreen — teams, retirement and the wall clock', () => {
+  it('shows the elapsed time while a match is running', () => {
+    const state = buildState();
+    state.match.startedAt = new Date(Date.now() - 95_000).toISOString();
+    mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
+    renderAt('c1');
+    expect(screen.getByLabelText('Elapsed match time')).toHaveTextContent(/1 min 35 sec/);
+  });
+
+  it('shows each side team and country when the match carries them', () => {
+    const state = buildState();
+    state.match.teams = {
+      A: { name: 'Riverside', country: 'COL' },
+      B: { name: null, country: 'ESP' },
+    };
+    mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
+    renderAt('c1');
+    expect(screen.getByText('Riverside · COL')).toBeInTheDocument();
+    // A country with no club name still gets shown, on its own.
+    expect(screen.getByText('ESP')).toBeInTheDocument();
+  });
+
+  it('marks the side that retired, and says so in the result', () => {
+    const state = buildState({ matchWinner: 'B', retiredSide: 'A', finalised: true });
+    mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
+    renderAt('c1');
+    expect(screen.getByText('Retired')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/retired/i);
+  });
+
+  it('leaves the retirement marker off a match played to its end', () => {
+    const state = buildState({ matchWinner: 'B', finalised: true });
+    mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
+    renderAt('c1');
+    expect(screen.queryByText('Retired')).not.toBeInTheDocument();
+  });
+});
+
+describe('TvScreen — the wall clock advances', () => {
+  it('re-renders every second so the elapsed time keeps moving', () => {
+    jest.useFakeTimers();
+    try {
+      const state = buildState();
+      state.match.startedAt = new Date(Date.now() - 20_000).toISOString();
+      mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
+      renderAt('c1');
+      expect(screen.getByLabelText('Elapsed match time')).toHaveTextContent('0 min 20 sec');
+      act(() => {
+        jest.advanceTimersByTime(4000);
+      });
+      expect(screen.getByLabelText('Elapsed match time')).toHaveTextContent('0 min 24 sec');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

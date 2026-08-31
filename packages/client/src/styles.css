@@ -595,6 +595,415 @@ button.banner:active {
   }
 }
 
+/* ---------- Umpire court view ----------
+   A plan view of the court is how an umpire actually reads a match: who
+   serves, from which service court, and therefore who receives (the
+   diagonal box). See docs/umpire-screen-spec.md. */
+
+.umpire-court-view {
+  gap: 0.75rem;
+}
+
+.umpire-meta {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.umpire-teams {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.umpire-team {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+
+.umpire-team.side-a {
+  border-color: var(--side-a-dim);
+}
+
+.umpire-team.side-b {
+  border-color: var(--side-b-dim);
+}
+
+.umpire-team-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.umpire-team-sets {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.umpire-team-score {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The court sits between the two point buttons, so the umpire's thumbs land
+   on the correct side of the net without crossing the diagram. */
+.umpire-play {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: stretch;
+}
+
+.point-button {
+  min-width: 3.5rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+
+.point-button.side-a {
+  border-color: var(--side-a-dim);
+  color: var(--side-a);
+}
+
+.point-button.side-b {
+  border-color: var(--side-b-dim);
+  color: var(--side-b);
+}
+
+.point-button:disabled {
+  opacity: 0.45;
+}
+
+.court-diagram {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2px minmax(0, 1fr);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+  min-height: 9rem;
+}
+
+.court-net {
+  background: var(--border-strong);
+}
+
+.court-half {
+  position: relative;
+  display: grid;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.court-box {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.15rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  min-width: 0;
+}
+
+.court-box-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Only the server's box is filled — the receiver is always the diagonal, so
+   highlighting both would add noise without adding information. */
+.court-box-serving {
+  background: rgba(251, 146, 60, 0.22);
+  border-color: var(--warning);
+}
+
+.court-box-serving .court-box-name {
+  color: #fdba74;
+}
+
+.court-box-flag {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--warning);
+}
+
+/* Sits on the line between a pair's two service courts, so it has to read
+   as a control rather than as part of the court markings — and it has to be
+   thumb-sized, since it is used on a phone held sideways. 44px is the
+   minimum comfortable touch target; below that a tap lands on the court box
+   behind it and appears to do nothing. */
+.court-swap {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.05rem;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--bg-raised-2);
+  border: 1px solid var(--accent);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+}
+
+.court-swap:hover {
+  background: var(--bg-raised);
+  border-color: var(--side-a);
+}
+
+.court-swap:active {
+  transform: translate(-50%, -50%) scale(0.94);
+}
+
+.court-swap .court-swap-glyph {
+  font-size: 1.05rem;
+}
+
+.court-swap .court-swap-label {
+  font-size: 0.55rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.umpire-setup-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.umpire-setup-bar .primary {
+  margin-left: auto;
+}
+
+/* The call the umpire says out loud — the single most-read thing on the
+   screen, so it gets the largest type in the footer. */
+.umpire-callbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.umpire-call {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .umpire-court-view {
+    gap: 0.4rem;
+  }
+
+  .umpire-team {
+    padding: 0.25rem 0.5rem;
+  }
+
+  .umpire-team-name {
+    font-size: 0.8rem;
+  }
+
+  .umpire-team-score {
+    font-size: 1.15rem;
+  }
+
+  /* The court absorbs the leftover height, the way the score buttons did
+     in the previous layout — it is what the umpire is reading. */
+  .umpire-play {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .court-diagram {
+    min-height: 0;
+    height: 100%;
+  }
+
+  .point-button {
+    font-size: 1.2rem;
+    min-width: 2.8rem;
+  }
+
+  .court-box {
+    padding: 0.3rem 0.45rem;
+  }
+
+  .court-box-name {
+    font-size: 0.78rem;
+  }
+
+  /* Still a full-size touch target on a short screen. */
+  .court-swap {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .umpire-call {
+    font-size: 1rem;
+  }
+}
+
+/* ---------- Confirmation dialog ---------- */
+
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(3, 6, 15, 0.72);
+  animation: fade-in 0.15s ease;
+}
+
+.confirm-dialog {
+  width: min(28rem, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 1.1rem 1.2rem;
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+
+.confirm-dialog h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1.15rem;
+}
+
+.confirm-dialog p {
+  margin: 0 0 0.9rem;
+  color: var(--text-dim);
+}
+
+.confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.match-elapsed {
+  margin: 0;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+}
+
+.match-complete .umpire-scoreboard {
+  margin: 0.75rem 0;
+}
+
+/* On a landscape phone the dialog is most of the screen, so it tightens up
+   the same way the rest of the umpire view does. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .confirm-dialog {
+    padding: 0.7rem 0.85rem;
+  }
+
+  .confirm-dialog h2 {
+    font-size: 1rem;
+  }
+
+  .confirm-dialog p {
+    margin-bottom: 0.6rem;
+    font-size: 0.85rem;
+  }
+}
+
+/* Retirement and team identity, shown wherever a summary appears. */
+.retired-tag {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(248, 113, 113, 0.14);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  color: var(--danger);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.team-identity {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.tv-elapsed {
+  margin: 0.25rem 0 0;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.match-team-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.75rem;
+  /* Without an explicit full width, this grid can share a flex-wrap line
+     with the narrower fields above it (Court, Umpire) instead of always
+     starting its own row below them. */
+  width: 100%;
+}
+
+.team-fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+}
+
+.team-fieldset.side-a {
+  border-color: var(--side-a-dim);
+}
+
+.team-fieldset.side-b {
+  border-color: var(--side-b-dim);
+}
+
+.team-fieldset legend {
+  padding: 0 0.35rem;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
 /* ---------- TV screen ---------- */
 
 .tv-screen {
@@ -664,9 +1073,23 @@ button.banner:active {
 }
 
 .tv-scoreboard {
-  display: grid;
-  grid-template-columns: minmax(11rem, 2fr) repeat(3, minmax(4.5rem, 1fr));
-  width: min(100%, 1100px);
+  /* Not display:grid: each row below is its own independent grid sharing
+     the identical column template (see .tv-set-labels, .tv-player-row),
+     rather than a real CSS Grid `subgrid` row. Deliberately not subgrid —
+     it has zero support on the old smart TV browsers this app targets
+     (e.g. LG webOS's bundled Chromium predates subgrid by years), and
+     without it a subgrid row silently collapses to a single column, which
+     is exactly what happened on a real TV. Duplicating the same explicit
+     template on every row is the pre-subgrid technique for the identical
+     pixel-aligned result, using only baseline CSS Grid.
+     --set-count is set inline per match (see TvScreen/AdminDashboard) to
+     the number of sets actually played — a hardcoded repeat(3, ...) here
+     used to reserve a column for a set that doesn't exist yet, leaving an
+     empty gap on any match not yet in its 3rd set. Falls back to 3 so a
+     caller that forgets to set it still renders something sane. */
+  /* A TV is read from across a room — harness the screen rather than
+     leaving most of it dark around a fixed-width card. */
+  width: 90vw;
   overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
@@ -676,14 +1099,13 @@ button.banner:active {
 .tv-set-labels,
 .tv-player-row {
   display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: subgrid;
+  grid-template-columns: minmax(11rem, 2fr) repeat(var(--set-count, 3), minmax(4.5rem, 1fr));
 }
 
 .tv-set-labels > span,
 .tv-player-row > strong,
 .tv-player-name {
-  min-height: 4.25rem;
+  min-height: clamp(4.25rem, 17vh, 13rem);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -692,9 +1114,9 @@ button.banner:active {
 }
 
 .tv-set-labels > span {
-  min-height: 2.5rem;
+  min-height: clamp(2.5rem, 5vh, 4.5rem);
   color: var(--text-dim);
-  font-size: 0.82rem;
+  font-size: clamp(0.82rem, 1.6vh, 1.3rem);
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -713,7 +1135,7 @@ button.banner:active {
   gap: 0.65rem;
   padding: 0.75rem 1rem;
   color: var(--text);
-  font-size: clamp(1.4rem, 3vw, 2.5rem);
+  font-size: clamp(1.8rem, 6vh, 5rem);
   font-weight: 700;
 }
 
@@ -742,14 +1164,24 @@ button.banner:active {
   text-transform: uppercase;
 }
 
+/* Completed-set scores: still readable, but deliberately smaller than the
+   live current-set score below and the player names above them, so the
+   eye lands on what the match actually hinges on right now. */
 .tv-player-row > strong {
-  font-size: clamp(2.75rem, 7vw, 6rem);
+  font-size: clamp(2rem, 5.5vh, 4.25rem);
   font-variant-numeric: tabular-nums;
 }
 
 .tv-scoreboard .current-set {
   background: rgba(251, 191, 36, 0.12);
   color: var(--warning);
+}
+
+/* The live score of the set in progress — the headline number on the
+   whole screen. */
+.tv-player-row > strong.current-set {
+  font-size: clamp(3.5rem, 13vh, 10rem);
+  font-weight: 800;
 }
 
 .match-complete {
@@ -766,8 +1198,12 @@ button.banner:active {
 }
 
 .history-scoreboard {
-  grid-template-columns: minmax(9rem, 2fr) repeat(3, minmax(3.25rem, 1fr));
   width: 100%;
+}
+
+.history-scoreboard .tv-set-labels,
+.history-scoreboard .tv-player-row {
+  grid-template-columns: minmax(9rem, 2fr) repeat(var(--set-count, 3), minmax(3.25rem, 1fr));
 }
 
 .history-scoreboard .tv-set-labels > span,
@@ -787,6 +1223,11 @@ button.banner:active {
 
 .umpire-scoreboard {
   width: 100%;
+}
+
+.umpire-scoreboard .tv-set-labels,
+.umpire-scoreboard .tv-player-row {
+  grid-template-columns: minmax(8rem, 1.5fr) repeat(var(--set-count, 3), minmax(3rem, 1fr));
 }
 
 .umpire-scoreboard .tv-set-labels > span,
@@ -839,19 +1280,44 @@ button.banner:active {
 
 .admin-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+  /* Courts/umpires needs less room than the busier "Create match" form, but
+     a fixed 420px cap (tried first) made its own inputs feel pinched, and
+     a 2:3 split (tried second) was still tight for the TV-link row. A
+     proportional ~45:55 split scales with the window instead of leaving
+     Create Match to stretch unbounded on a wide screen. */
+  grid-template-columns: minmax(400px, 1fr) minmax(0, 1.2fr);
+  gap: 0.6rem;
+  align-items: start;
+}
+
+.admin-column {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
 }
 
 .admin-card {
   background: rgba(18, 24, 43, 0.75);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1rem;
+  padding: 0.75rem;
+}
+
+/* This heading is always the first element in its card (title, then the
+   add-form, then the list) — the page-level h2 margin (below) is sized for
+   separating whole sections, which is too much space above a card's own
+   title. */
+.admin-card h2 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
 }
 
 .admin-dashboard h1 {
   margin-bottom: 0.5rem;
+}
+
+.admin-status {
+  margin: 0;
 }
 
 .tournament-date {
@@ -876,9 +1342,13 @@ button.banner:active {
 .admin-dashboard fieldset {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: 0.6rem;
   align-items: end;
-  background: var(--bg-raised);
+  /* The fieldset already sits inside an .admin-card, which supplies the
+     surrounding card look — its own border/background/padding would just
+     draw a second, redundant box around the same content. */
+  border: none;
+  padding: 0;
 }
 
 .match-player-fields {
@@ -902,25 +1372,66 @@ button.banner:active {
   border-radius: var(--radius-sm);
   padding: 0.6rem 0.9rem;
   font-size: 0.9rem;
+  /* Separates the topline/info-line/score-table stack inside each history
+     row, instead of them sitting flush against each other. */
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .court-list {
   list-style: none;
   padding: 0;
+  margin-top: 0.6rem;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.4rem;
 }
 
 .court-list li {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.6rem;
   flex-wrap: wrap;
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.75rem 1rem;
+  padding: 0.6rem 0.75rem;
+}
+
+/* Forced onto its own full-width line (row 1: name, status, join code) —
+   same width:100% technique as .match-team-fields, so it never shares a
+   line with .court-row-actions below it, regardless of how much space
+   either would fit in on its own. */
+.court-row-info {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+/* Row 2: the TV link plus its actions, always together so Copy/Remove sit
+   at a comfortable distance from the input rather than crowding it. */
+.court-row-actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.court-row-actions input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The name/status pair (umpire rows, and courts before .court-row-info):
+   plain inline spans have no space between them on their own, so this
+   needs its own flex+gap rather than relying on word-spacing. */
+.court-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
 }
 
 .court-header,
@@ -1176,8 +1687,9 @@ button.banner:active {
     text-align: center;
   }
 
-  .tv-scoreboard {
-    grid-template-columns: minmax(7.5rem, 1.5fr) repeat(3, minmax(3.5rem, 1fr));
+  .tv-set-labels,
+  .tv-player-row {
+    grid-template-columns: minmax(7.5rem, 1.5fr) repeat(var(--set-count, 3), minmax(3.5rem, 1fr));
   }
 
   .tv-player-name {
@@ -1191,8 +1703,9 @@ button.banner:active {
 }
 
 @media (max-width: 560px) {
-  .history-scoreboard {
-    grid-template-columns: minmax(6.5rem, 1.5fr) repeat(3, minmax(2.75rem, 1fr));
+  .history-scoreboard .tv-set-labels,
+  .history-scoreboard .tv-player-row {
+    grid-template-columns: minmax(6.5rem, 1.5fr) repeat(var(--set-count, 3), minmax(2.75rem, 1fr));
   }
 
   .history-scoreboard .tv-player-name {

@@ -119,6 +119,26 @@ describe('deriveMatchState', () => {
     expect(state.onInterval).toBe(true);
   });
 
+  it('still fires the mid-game interval in set 2 after the between-games break was resumed', () => {
+    // Every real match resumes the between-games break before scoring can
+    // resume (the UI locks points until it does) — so a resume at 0-0
+    // followed by more points reaching this set's own interval score must
+    // still show the mid-game interval. A single shared "resumed" flag for
+    // both kinds of break would wrongly stay set from the earlier resume
+    // and swallow this one.
+    const events = [
+      ...Array.from({ length: 20 }, () => point('A')),
+      resumeInterval(), // dismisses set 1's mid-game interval
+      ...Array.from({ length: 15 }, () => point('B')),
+      point('A'), // closes set 1 at 21-15
+      resumeInterval(), // dismisses the between-games break opening set 2
+      ...Array.from({ length: 11 }, () => point('B')), // set 2 hits its own interval
+    ];
+    const state = deriveMatchState(events, standard);
+    expect(state.currentSet.setNumber).toBe(2);
+    expect(state.onInterval).toBe(true);
+  });
+
   it('closes a set and starts the next when someone wins it', () => {
     // B must reach 15 before A's 21st point, or the set would have already
     // closed at 21-0 — a real rally sequence can't score 21-15 any other way.
@@ -331,5 +351,166 @@ describe('otherSide', () => {
   it('flips A to B and back', () => {
     expect(otherSide('A')).toBe('B');
     expect(otherSide('B')).toBe('A');
+  });
+});
+
+describe('serviceOver', () => {
+  it('is false before any point has been played', () => {
+    expect(
+      deriveMatchState([startSet(undefined, 'a1', 'A')], SCORING_PRESETS.standard).serviceOver,
+    ).toBe(false);
+  });
+
+  it('is false when the side that opened the serve wins the first rally', () => {
+    const events = [startSet(undefined, 'a1', 'A'), point('A')];
+    expect(deriveMatchState(events, SCORING_PRESETS.standard).serviceOver).toBe(false);
+  });
+
+  it('is true when the receiver wins the first rally', () => {
+    const events = [startSet(undefined, 'a1', 'A'), point('B')];
+    expect(deriveMatchState(events, SCORING_PRESETS.standard).serviceOver).toBe(true);
+  });
+
+  it('is false while the server keeps winning rallies', () => {
+    const events = [startSet(undefined, 'a1', 'A'), point('A'), point('A')];
+    expect(deriveMatchState(events, SCORING_PRESETS.standard).serviceOver).toBe(false);
+  });
+
+  it('is true on the rally that takes the serve back across', () => {
+    const events = [startSet(undefined, 'a1', 'A'), point('A'), point('B')];
+    expect(deriveMatchState(events, SCORING_PRESETS.standard).serviceOver).toBe(true);
+  });
+
+  it('is recomputed after an undo rather than left stale', () => {
+    // Undoing the rally that changed hands must clear the "service over"
+    // state too, or the umpire would keep being told to say it.
+    const events = [startSet(undefined, 'a1', 'A'), point('A'), point('B'), undo()];
+    expect(deriveMatchState(events, SCORING_PRESETS.standard).serviceOver).toBe(false);
+  });
+
+  it('stays false for points replayed without a recorded opening serve', () => {
+    // Older matches (and the stubbed admin flows) can produce POINT events
+    // with no START_SET, so there is no opening side to compare against.
+    expect(deriveMatchState([point('B')], SCORING_PRESETS.standard).serviceOver).toBe(false);
+  });
+});
+
+describe('interval kinds', () => {
+  const toInterval = (events: ScoreEvent[]) =>
+    deriveMatchState(events, SCORING_PRESETS.standard).interval;
+
+  it('is null while play is live', () => {
+    expect(toInterval([startSet(undefined, 'a1', 'A'), point('A')])).toBeNull();
+  });
+
+  it('reports a 60-second mid-game interval at the interval score', () => {
+    const events = [
+      startSet(undefined, 'a1', 'A'),
+      ...Array.from({ length: 11 }, () => point('A')),
+    ];
+    expect(toInterval(events)).toEqual({ kind: 'MID_GAME', seconds: 60 });
+  });
+
+  it('clears once the umpire resumes the mid-game interval', () => {
+    const events = [
+      startSet(undefined, 'a1', 'A'),
+      ...Array.from({ length: 11 }, () => point('A')),
+      resumeInterval(),
+    ];
+    expect(toInterval(events)).toBeNull();
+  });
+
+  it('reports a 120-second break once a game has been won', () => {
+    const events = [
+      startSet(undefined, 'a1', 'A'),
+      ...Array.from({ length: 21 }, () => point('A')),
+    ];
+    expect(toInterval(events)).toEqual({ kind: 'BETWEEN_GAMES', seconds: 120 });
+  });
+
+  it('clears the between-games break once the umpire resumes', () => {
+    const events = [
+      startSet(undefined, 'a1', 'A'),
+      ...Array.from({ length: 21 }, () => point('A')),
+      resumeInterval(),
+    ];
+    expect(toInterval(events)).toBeNull();
+  });
+
+  it('offers no break after the final game, because none is owed', () => {
+    const events = [
+      startSet(undefined, 'a1', 'A'),
+      ...Array.from({ length: 21 }, () => point('A')),
+      resumeInterval(),
+      ...Array.from({ length: 21 }, () => point('A')),
+    ];
+    const state = deriveMatchState(events, SCORING_PRESETS.standard);
+    expect(state.matchWinner).toBe('A');
+    expect(state.interval).toBeNull();
+  });
+
+  it('keeps onInterval meaning the mid-game break only', () => {
+    // The TV banner and the umpire's point lock both key off onInterval, so
+    // the longer between-games break must not silently start driving them.
+    const events = [
+      startSet(undefined, 'a1', 'A'),
+      ...Array.from({ length: 21 }, () => point('A')),
+    ];
+    const state = deriveMatchState(events, SCORING_PRESETS.standard);
+    expect(state.interval?.kind).toBe('BETWEEN_GAMES');
+    expect(state.onInterval).toBe(false);
+  });
+});
+
+describe('finalised', () => {
+  it('is false while a match is merely decided on points', () => {
+    const events = [
+      startSet(undefined, 'a1', 'A'),
+      ...Array.from({ length: 42 }, () => point('A')),
+    ];
+    const state = deriveMatchState(events, SCORING_PRESETS.standard);
+    expect(state.matchWinner).toBe('A');
+    expect(state.finalised).toBe(false);
+  });
+
+  it('is true once the umpire signs a decided match off', () => {
+    // The RETIRE arrives *after* a winner exists, so the replay must not
+    // discard it the way it discards other post-completion events.
+    const events = [
+      startSet(undefined, 'a1', 'A'),
+      ...Array.from({ length: 42 }, () => point('A')),
+      retire('A'),
+    ];
+    expect(deriveMatchState(events, SCORING_PRESETS.standard).finalised).toBe(true);
+  });
+
+  it('is true when a match is ended early by retirement', () => {
+    const events = [startSet(undefined, 'a1', 'A'), point('A'), retire('B')];
+    const state = deriveMatchState(events, SCORING_PRESETS.standard);
+    expect(state.matchWinner).toBe('B');
+    expect(state.finalised).toBe(true);
+  });
+});
+
+describe('retiredSide', () => {
+  it('is null for a match played to its conclusion', () => {
+    const events = [
+      startSet(undefined, 'a1', 'A'),
+      ...Array.from({ length: 42 }, () => point('A')),
+      retire('A'),
+    ];
+    const state = deriveMatchState(events, SCORING_PRESETS.standard);
+    expect(state.finalised).toBe(true);
+    expect(state.retiredSide).toBeNull();
+  });
+
+  it('names the losing side when a match is ended early', () => {
+    const events = [startSet(undefined, 'a1', 'A'), point('A'), retire('B')];
+    expect(deriveMatchState(events, SCORING_PRESETS.standard).retiredSide).toBe('A');
+  });
+
+  it('names side B when B is the one who retires', () => {
+    const events = [startSet(undefined, 'a1', 'A'), point('A'), retire('A')];
+    expect(deriveMatchState(events, SCORING_PRESETS.standard).retiredSide).toBe('B');
   });
 });

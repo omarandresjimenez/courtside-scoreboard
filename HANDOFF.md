@@ -255,6 +255,137 @@ Everything above is the first long session. This is what changed after it.
   broke this session — the `ipcMain.handle` signature — is exactly the kind
   a small unit test would have caught.
 
+## Later session — umpires, a real scoring bug, and TV screens that actually work on a TV
+
+Everything above predates this session. Test count is now **388** (90
+shared / 112 server / 186 client), up from 202.
+
+1. **Umpires are now a managed resource, same shape as courts.** New
+   `Umpire` Prisma model (`id`, `tournamentId`, `name`), a full CRUD route
+   (`packages/server/src/routes/umpires.ts`: `POST`/`GET /api/umpires`,
+   `DELETE /api/umpires/:id`, all admin-authenticated), and an "Umpires"
+   card in the admin dashboard mirroring the courts card. `Match` gained
+   `assignedUmpireId`; creating a match now **requires** picking an umpire,
+   and the server enforces the same one-at-a-time rule courts already had
+   (`findFirst` over `CREATED`/`IN_PROGRESS` matches) — an umpire already
+   on a live match shows as "busy" and can't be double-booked. The umpire's
+   name and the court's label now both show on the umpire screen and the
+   TV screen (`match.umpireName ?? umpires.find(...)`, same fallback
+   pattern courts already used for `courtLabel`).
+
+2. **The mid-game interval only ever fired once per match — a real
+   scoring bug, not a display glitch.** `SetResult.intervalResumed` was a
+   single boolean, set `true` by _any_ `RESUME_INTERVAL` event — including
+   the one that dismisses the between-games break at the start of a new
+   set. Since the umpire always resumes that opening break before scoring
+   can continue, the flag flipped true at 0-0, which then permanently
+   suppressed that same set's own mid-game interval later on. In practice:
+   the interval worked in set 1, and never again. Confirmed against real
+   match data (13 `RESUME_INTERVAL` events across 3 sets, only 1 mid-game
+   interval ever fired) before fixing. Fixed by splitting the flag in two
+   — `intervalResumed` (mid-game) and `openingBreakResumed` (between-games)
+   — with `RESUME_INTERVAL`'s handler deciding which one to set based on
+   the score at the moment it's processed (0-0 with a prior completed set
+   is unambiguously the opening break, since `intervalAt` is always > 0).
+   See `packages/shared/src/scoring.ts` and the regression test in
+   `scoring.test.ts` ("still fires the mid-game interval in set 2 after
+   the between-games break was resumed") — the _previous_ test covering
+   this exact scenario never actually exercised the between-games resume,
+   which is exactly how a 100%-coverage suite still shipped the bug.
+
+3. **The TV screen's score table silently degraded to one column per row
+   on a real smart TV.** Confirmed on an actual LG TV (photo evidence): a
+   two-set match showed sets stacked vertically instead of in columns.
+   Root cause — the table used CSS Grid **`subgrid`** (`.tv-set-labels`,
+   `.tv-player-row`) so header and player rows shared the parent's column
+   tracks. Smart TV browsers are typically years behind desktop Chrome;
+   `subgrid` needs Chromium 117+/Safari 16+, and an unsupported value for
+   `grid-template-columns` falls back to `none` — one implicit column,
+   exactly the collapse seen on the TV. **Do not use CSS `subgrid`
+   anywhere in this codebase** — it will not degrade gracefully on the
+   hardware this app targets. Fixed by going back to the pre-subgrid
+   technique: every row independently declares the _identical_ explicit
+   `grid-template-columns` (driven by a `--set-count` CSS custom property
+   set inline per match, so the column count matches how many sets have
+   actually been played instead of a hardcoded `repeat(3, ...)` that used
+   to leave an empty phantom column on any match not yet in set 3).
+   Verified via CDP that all rows still compute pixel-identical column
+   positions with zero use of `subgrid`. Same fix applied to the admin
+   history table (`.history-scoreboard`) and the umpire's end-of-match
+   summary (`.umpire-scoreboard`), which had the same hardcoded-3 and
+   subgrid dependency respectively.
+
+4. **TV screen resized to actually use a TV.** It was capped at a fixed
+   `1100px` width regardless of screen size. Now `width: 90vw`. Player
+   names and the score of the set _in progress_ are both much larger
+   (`.tv-player-row > strong.current-set`, a new rule keyed off the same
+   class the "which set is live" highlight already used); completed-set
+   scores stay comparatively small so the live number is what reads from
+   across a room. Row heights and label text scale with `vh` via `clamp()`
+   rather than fixed `rem`, so this scales with the actual screen instead
+   of just being "bigger."
+
+5. **Retirement is now labeled everywhere a match summary appears** — the
+   umpire's end-of-match table, the TV screen's result line, and the admin
+   history list all show which side retired (`derived.retiredSide`,
+   distinguished in `scoring.ts` from a `RETIRE` event that merely signs
+   off a match already decided on court — only the former sets it).
+
+6. **No more admin password, anywhere.** The desktop app generated a
+   random per-install password; the admin dashboard had a visible password
+   field that showed until one was known. Both are gone. `main.js` now
+   uses one fixed `ADMIN_PASSWORD = 'change-me'` constant (matching the
+   server's own existing fallback in `config.ts`), migrating any existing
+   install's old random password to it on next launch (`loadOrCreateConfig`
+   always writes the fixed value now, regardless of what's already on
+   disk). `AdminDashboard.tsx` never renders a password input; it resolves
+   the password from the URL, then `localStorage`, then the same fixed
+   default. This is a deliberate simplification for a LAN-only,
+   single-admin tool — not a security hardening.
+   - A real bug surfaced by this: the admin dashboard's status/error
+     message (`role="status"`) was a single shared piece of state used by
+     _every_ action (add/remove a court or umpire, create a match, copy a
+     link) but only ever rendered in one place, tucked inside the "Create
+     match" card. Clicking "Add court" with an invalid password produced
+     a real 401 and a real error, just displayed nowhere near the button
+     that was clicked — looked exactly like "Add court doesn't work."
+     Fixed by moving the single status line to the top of the page, right
+     under the (now-gone) password field's old position, so every action's
+     feedback lands in the same predictable spot.
+
+7. **Admin dashboard layout, several iterations.** The courts/umpires
+   column and the "Create match" column started as an even 50/50 split,
+   which left the (much simpler) courts/umpires side mostly empty; it's
+   now a proportional `minmax(400px, 1fr) minmax(0, 1.2fr)` split that
+   favors Create Match without pinning courts/umpires to a fixed narrow
+   width. Each court/umpire card lost a redundant heading (it used to be
+   "Add a court" as a `<legend>` _and_ "Courts" as a section heading for
+   the same block — now just one heading, add-row, list, in that order).
+   The court list item is explicitly two rows now (name/status/code, then
+   TV-link-input/Copy/Remove as one full-width flex group each — same
+   `width: 100%`-on-a-flex-child trick already used for `.match-team-fields`),
+   instead of the TV-link `<label>` wrapping onto its own cramped line.
+   Both `.court-header` (umpire rows) and `.court-row-info` (court rows)
+   needed explicit `gap` — the umpire name/status pair had none at all
+   (plain inline `<span>`s touch with zero gap unless a layout rule gives
+   them one).
+
+8. **Desktop app icon + web favicon**, wiring only — the icon files
+   themselves (`build-assets/icon.icns`/`.ico`/`icon-1024.png`) already
+   existed from an earlier pass and were already wired into
+   electron-builder's `build.mac.icon`/`build.win.icon` for **packaged**
+   builds. Neither the Dock icon nor any browser tab showed anything while
+   running from source, though. Fixed: `app.dock.setIcon()` (macOS) and
+   the launcher `BrowserWindow`'s `icon` option now run in dev mode only
+   (`devIconPath()` returns `null` when `app.isPackaged`, since
+   `build-assets` isn't copied into a packaged app's resources and a
+   packaged build already gets its icon from electron-builder). For the
+   web pages, a 128×128 PNG derived from the same source
+   (`packages/client/public/favicon.png`, via `sips -z 128 128`) plus a
+   `<link rel="icon">` in `packages/client/index.html` — Vite's `public/`
+   convention copies it to `dist/` root untouched, so every route sharing
+   that one `index.html` (admin, TV, umpire, join) gets it for free.
+
 ## Desktop app (`packages/desktop/`) — Electron wrapper
 
 **Why:** running the server required Node install + `npm install` + hand-
@@ -518,12 +649,14 @@ npm run typecheck     # tsc --noEmit across every package
 npm test              # Jest --coverage in every package
 ```
 
-202 tests total across shared/server/client, 100% coverage on every
-metric except one intentionally-uncovered, documented branch in
+388 tests total across shared/server/client (90/112/186), 100% coverage
+on every metric except one intentionally-uncovered, documented branch in
 `AdminDashboard.tsx` (the not-yet-built "custom" scoring preset — see the
-comment at its call site). The `packages/desktop` Electron app has **no
-automated tests** — it was validated manually this session (dev mode +
-actual packaged binaries + Playwright against the real running server),
+comment at its call site) and one branch in `matches.ts` documented as an
+istanbul coverage-merge artifact in `packages/server/jest.config.cjs`. The
+`packages/desktop` Electron app has **no automated tests** — it was
+validated manually (dev mode + actual packaged binaries + CDP against the
+real running server, and against a real smart TV for the `subgrid` fix),
 not via a test suite. Adding some (at minimum, unit tests for the pure
 path-resolution functions in `main.js`) would be a reasonable next step
 if this app keeps evolving.
@@ -534,12 +667,17 @@ if this app keeps evolving.
 | ------------------------------ | ---------------------------------------------------------------------------- |
 | Scoring rules / win conditions | `packages/shared/src/scoring.ts`                                             |
 | Socket.io event names/payloads | `packages/shared/src/events.ts`                                              |
-| Admin API routes               | `packages/server/src/routes/{courts,matches}.ts`                             |
+| Admin API routes               | `packages/server/src/routes/{courts,matches,umpires}.ts`                     |
 | Live scoring socket handlers   | `packages/server/src/sockets/index.ts`                                       |
 | Umpire/TV/Admin screens        | `packages/client/src/routes/*.tsx`                                           |
+| Umpire court diagram           | `packages/client/src/routes/CourtDiagram.tsx`                                |
+| Umpire's spoken call text      | `packages/shared/src/calls.ts`                                               |
+| Confirm-before-acting dialog   | `packages/client/src/lib/ConfirmDialog.tsx`                                  |
+| Interval/break countdown       | `packages/client/src/lib/useCountdown.ts`                                    |
 | App-wide styling/theme         | `packages/client/src/styles.css`                                             |
 | Join-code entry flow           | `packages/client/src/routes/JoinScreen.tsx`                                  |
 | Error overlay (pre-React)      | `packages/client/index.html`                                                 |
+| Web page favicon               | `packages/client/public/favicon.png` (Vite copies `public/` verbatim)        |
 | Desktop app main process       | `packages/desktop/src/main.js`                                               |
 | Desktop app packaging config   | `packages/desktop/package.json` (`"build"` block)                            |
 | Desktop launcher window UI     | `packages/desktop/src/launcher.html` (plain HTML/JS, not the React app)      |

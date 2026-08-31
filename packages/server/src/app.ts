@@ -9,6 +9,7 @@ import { courtsRouter } from './routes/courts.js';
 import { healthRouter } from './routes/health.js';
 import { matchesRouter, setMatchesSocketServer } from './routes/matches.js';
 import { tournamentsRouter } from './routes/tournaments.js';
+import { umpiresRouter } from './routes/umpires.js';
 import { registerSocketHandlers } from './sockets/index.js';
 
 export interface CourtsideApp {
@@ -43,6 +44,7 @@ export function createApp(options: CreateAppOptions = {}): CourtsideApp {
   app.use('/api', matchesRouter);
   app.use('/api', courtsRouter);
   app.use('/api', tournamentsRouter);
+  app.use('/api', umpiresRouter);
 
   const clientDistPath = options.clientDistPath ?? config.clientDistPath;
   if (existsSync(clientDistPath)) {

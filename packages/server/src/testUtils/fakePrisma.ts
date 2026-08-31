@@ -39,6 +39,11 @@ interface FakeMatchRow {
   umpireToken: string;
   umpireCode: string;
   assignedCourtId: string | null;
+  assignedUmpireId: string | null;
+  teamAName: string | null;
+  teamBName: string | null;
+  teamACountry: string | null;
+  teamBCountry: string | null;
   createdAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
@@ -60,6 +65,13 @@ interface FakeTournamentRow {
   createdAt: Date;
 }
 
+interface FakeUmpireRow {
+  id: string;
+  tournamentId: string | null;
+  name: string;
+  createdAt: Date;
+}
+
 let nextId = 1;
 function generateId(prefix: string): string {
   nextId += 1;
@@ -72,6 +84,7 @@ export function createFakePrisma() {
   const events = new Map<string, FakeEventRow[]>();
   const courts = new Map<string, FakeCourtRow>();
   const tournaments = new Map<string, FakeTournamentRow>();
+  const umpires = new Map<string, FakeUmpireRow>();
 
   function seedTournament(overrides: Partial<FakeTournamentRow> = {}): FakeTournamentRow {
     const id = overrides.id ?? generateId('tournament');
@@ -96,10 +109,15 @@ export function createFakePrisma() {
       pointsToWin: 21,
       capScore: 30,
       intervalAt: 11,
+      teamAName: null,
+      teamBName: null,
+      teamACountry: null,
+      teamBCountry: null,
       scoringLocked: false,
       umpireToken: 'test-token',
       umpireCode: 'TESTCODE',
       assignedCourtId: null,
+      assignedUmpireId: null,
       createdAt: new Date(),
       startedAt: null,
       completedAt: null,
@@ -153,6 +171,19 @@ export function createFakePrisma() {
     return row;
   }
 
+  function seedUmpire(overrides: Partial<FakeUmpireRow> = {}): FakeUmpireRow {
+    const id = overrides.id ?? generateId('umpire');
+    const row: FakeUmpireRow = {
+      id,
+      tournamentId: null,
+      name: 'Uma Umpire',
+      createdAt: new Date(),
+      ...overrides,
+    };
+    umpires.set(id, row);
+    return row;
+  }
+
   const prisma = {
     match: {
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
@@ -169,6 +200,11 @@ export function createFakePrisma() {
           umpireToken: data.umpireToken as string,
           umpireCode: data.umpireCode as string,
           assignedCourtId: (data.assignedCourtId as string | null) ?? null,
+          assignedUmpireId: (data.assignedUmpireId as string | null) ?? null,
+          teamAName: (data.teamAName as string | null) ?? null,
+          teamBName: (data.teamBName as string | null) ?? null,
+          teamACountry: (data.teamACountry as string | null) ?? null,
+          teamBCountry: (data.teamBCountry as string | null) ?? null,
           createdAt: new Date(),
           startedAt: null,
           completedAt: null,
@@ -204,6 +240,31 @@ export function createFakePrisma() {
             ...(include.players ? { players: players.get(row.id) ?? [] } : {}),
             ...(include.events ? { events: events.get(row.id) ?? [] } : {}),
           };
+        },
+      ),
+
+      /** Supports only the court/umpire-occupancy queries the matches route makes. */
+      findFirst: jest.fn(
+        async ({
+          where,
+        }: {
+          where?: {
+            assignedCourtId?: string;
+            assignedUmpireId?: string;
+            status?: { in?: string[] };
+          };
+        } = {}) => {
+          const wanted = where?.status?.in;
+          return (
+            [...matches.values()].find(
+              (m) =>
+                (where?.assignedCourtId === undefined ||
+                  m.assignedCourtId === where.assignedCourtId) &&
+                (where?.assignedUmpireId === undefined ||
+                  m.assignedUmpireId === where.assignedUmpireId) &&
+                (wanted === undefined || wanted.includes(m.status)),
+            ) ?? null
+          );
         },
       ),
 
@@ -276,6 +337,36 @@ export function createFakePrisma() {
           return updated;
         },
       ),
+    },
+
+    umpire: {
+      create: jest.fn(async ({ data }: { data: { name: string; tournamentId?: string } }) => {
+        const row: FakeUmpireRow = {
+          id: generateId('umpire'),
+          tournamentId: data.tournamentId ?? null,
+          name: data.name,
+          createdAt: new Date(),
+        };
+        umpires.set(row.id, row);
+        return row;
+      }),
+
+      findMany: jest.fn(async ({ where }: { where?: { tournamentId?: string } } = {}) => {
+        return [...umpires.values()]
+          .filter((umpire) => !where?.tournamentId || umpire.tournamentId === where.tournamentId)
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      }),
+
+      findUnique: jest.fn(
+        async ({ where }: { where: { id: string } }) => umpires.get(where.id) ?? null,
+      ),
+
+      delete: jest.fn(async ({ where }: { where: { id: string } }) => {
+        const existing = umpires.get(where.id);
+        if (!existing) throw new Error(`Fake umpire ${where.id} not found`);
+        umpires.delete(where.id);
+        return existing;
+      }),
     },
 
     tournament: {
@@ -351,7 +442,30 @@ export function createFakePrisma() {
     },
   };
 
-  return { prisma, seedMatch, seedPlayers, seedEvent, seedCourt, seedTournament };
+  /**
+   * Empties every table. The fake is built once per test module, so without
+   * this rows accumulate across tests in a file — which is invisible until a
+   * rule like "one live match per court" starts reading them.
+   */
+  function reset(): void {
+    matches.clear();
+    players.clear();
+    events.clear();
+    courts.clear();
+    tournaments.clear();
+    umpires.clear();
+  }
+
+  return {
+    prisma,
+    seedMatch,
+    seedPlayers,
+    seedEvent,
+    seedCourt,
+    seedTournament,
+    seedUmpire,
+    reset,
+  };
 }
 
 export type FakePrisma = ReturnType<typeof createFakePrisma>;

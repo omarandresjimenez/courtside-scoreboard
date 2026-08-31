@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMatchState } from '../lib/useMatchState.js';
 
@@ -18,6 +19,14 @@ export function TvScreen() {
     `tv:${courtId}`,
   );
 
+  // Re-renders once a second so the wall clock advances. Runs before the
+  // guards below, because hooks cannot be conditional.
+  const [, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   if (!courtId) return <p className="screen-message">This TV link is missing a court ID.</p>;
   if (error && !state) return <p className="screen-message">Waiting for a match on this court…</p>;
   if (!state) return <p className="screen-message">Connecting…</p>;
@@ -29,6 +38,11 @@ export function TvScreen() {
         ...derived.sets.filter((set) => set.setNumber !== derived.currentSet.setNumber),
         derived.currentSet,
       ];
+  const elapsed = formatElapsedTime(match.startedAt, match.completedAt);
+  const teamLabel = (side: 'A' | 'B') => {
+    const team = match.teams?.[side];
+    return [team?.name, team?.country].filter(Boolean).join(' · ');
+  };
   const playerName = (side: 'A' | 'B') =>
     match.players
       .filter((p) => p.side === side)
@@ -54,7 +68,11 @@ export function TvScreen() {
         </time>
       </div>
 
-      <div className="tv-scoreboard" aria-label="Match score">
+      <div
+        className="tv-scoreboard"
+        aria-label="Match score"
+        style={{ '--set-count': scoreSets.length } as React.CSSProperties}
+      >
         <div className="tv-set-labels" aria-hidden="true">
           <span />
           {scoreSets.map((set) => (
@@ -70,9 +88,11 @@ export function TvScreen() {
           >
             <span className="tv-player-name">
               {playerName(side)}
+              {teamLabel(side) && <small className="team-identity">{teamLabel(side)}</small>}
               {!derived.matchWinner && servingPlayerName(side) && (
                 <strong className="serve-marker">Serving</strong>
               )}
+              {derived.retiredSide === side && <span className="retired-tag">Retired</span>}
             </span>
             {scoreSets.map((set) => (
               <strong
@@ -86,18 +106,29 @@ export function TvScreen() {
         ))}
       </div>
 
+      {elapsed && (
+        <p className="tv-elapsed" aria-label="Elapsed match time">
+          {elapsed}
+        </p>
+      )}
+
       {derived.matchWinner ? (
         <section className="match-complete" aria-live="polite">
-          <h1>{playerName(derived.matchWinner)} wins the match</h1>
-          {formatElapsedTime(match.startedAt, match.completedAt) && (
-            <p>Match time {formatElapsedTime(match.startedAt, match.completedAt)}</p>
-          )}
+          <h1>
+            {playerName(derived.matchWinner)} wins the match
+            {derived.retiredSide && ` — ${playerName(derived.retiredSide)} retired`}
+          </h1>
+          {elapsed && <p>Match time {elapsed}</p>}
           <button type="button" onClick={() => window.location.reload()}>
             Refresh display
           </button>
         </section>
       ) : (
-        derived.onInterval && <p className="banner">Interval</p>
+        derived.interval && (
+          <p className="banner">
+            {derived.interval.kind === 'MID_GAME' ? 'Interval' : 'Game interval'}
+          </p>
+        )
       )}
     </main>
   );

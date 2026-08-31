@@ -1,5 +1,5 @@
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { MatchStatePayload } from '@courtside/shared';
 import { UmpireScreen } from './UmpireScreen.js';
@@ -28,6 +28,7 @@ function buildState(overrides: Partial<MatchStatePayload['derived']> = {}): Matc
       status: 'IN_PROGRESS',
       scoringConfig: { pointsToWin: 21, capScore: 30, intervalAt: 11 },
       scoringLocked: true,
+      teams: { A: { name: null, country: null }, B: { name: null, country: null } },
       players: [
         { playerId: 'a1', side: 'A', name: 'Alice', shortName: 'ALI' },
         { playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' },
@@ -35,6 +36,8 @@ function buildState(overrides: Partial<MatchStatePayload['derived']> = {}): Matc
       umpireToken: 'tok',
       umpireCode: 'CODE01',
       assignedCourtId: 'c1',
+      courtLabel: 'Court 1',
+      assignedUmpireId: 'u1',
       createdAt: new Date().toISOString(),
       startedAt: new Date().toISOString(),
       completedAt: null,
@@ -62,6 +65,10 @@ function buildState(overrides: Partial<MatchStatePayload['derived']> = {}): Matc
       matchWinner: null,
       serve: { servingSide: 'A', serverPlayerId: 'a1', courtPositions: {} },
       onInterval: false,
+      interval: null,
+      serviceOver: false,
+      finalised: false,
+      retiredSide: null,
       ...overrides,
     },
   };
@@ -86,6 +93,7 @@ const noopHandlers = {
   undoLastPoint: jest.fn(),
   startSet: jest.fn(),
   resumeFromInterval: jest.fn(),
+  retireMatch: jest.fn(),
 };
 
 beforeEach(() => {
@@ -94,414 +102,705 @@ beforeEach(() => {
   noopHandlers.undoLastPoint.mockReset();
   noopHandlers.startSet.mockReset();
   noopHandlers.resumeFromInterval.mockReset();
+  noopHandlers.retireMatch.mockReset();
 });
 
 describe('UmpireScreen', () => {
-  it('reports a missing matchId (not just a missing token) when rendered outside its route', () => {
+  const ready = (payload: MatchStatePayload, overrides: Record<string, unknown> = {}) => {
     mockUseMatchState.mockReturnValue({
-      state: null,
-      connected: false,
-      error: null,
-      ...noopHandlers,
-    });
-    render(
-      <MemoryRouter>
-        <UmpireScreen />
-      </MemoryRouter>,
-    );
-    expect(screen.getByText(/missing its match ID or token/)).toBeInTheDocument();
-  });
-
-  it('reports a missing token/matchId rather than connecting with empty ones', () => {
-    mockUseMatchState.mockReturnValue({
-      state: null,
-      connected: false,
-      error: null,
-      ...noopHandlers,
-    });
-    renderAt('m1'); // no ?token=
-    expect(screen.getByText(/missing its match ID or token/)).toBeInTheDocument();
-  });
-
-  it('shows the server error message when one is present', () => {
-    mockUseMatchState.mockReturnValue({
-      state: null,
-      connected: false,
-      error: 'Invalid umpire token.',
-      ...noopHandlers,
-    });
-    renderAt('m1', 'bad-token');
-    expect(screen.getByText('Invalid umpire token.')).toBeInTheDocument();
-  });
-
-  it('shows a connecting message before any state has arrived', () => {
-    mockUseMatchState.mockReturnValue({
-      state: null,
-      connected: false,
-      error: null,
-      ...noopHandlers,
-    });
-    renderAt('m1', 'good-token');
-    expect(screen.getByText(/Connecting/)).toBeInTheDocument();
-  });
-
-  it('shows Live when connected', () => {
-    mockUseMatchState.mockReturnValue({
-      state: buildState(),
+      state: payload,
       connected: true,
+      isFromCache: false,
       error: null,
       ...noopHandlers,
+      ...overrides,
     });
-    renderAt('m1', 'good-token');
-    expect(screen.getByText('Live')).toBeInTheDocument();
-  });
+  };
 
-  it('shows Reconnecting… when not connected', () => {
-    mockUseMatchState.mockReturnValue({
-      state: buildState(),
-      connected: false,
-      error: null,
-      ...noopHandlers,
+  // The diagram places names in service-court boxes; this reads back which
+  // box (if any) is flagged as serving, which is the screen's core claim.
+  const servingBoxName = () =>
+    document.querySelector('.court-box-serving .court-box-name')?.textContent ?? null;
+  const boxNames = () =>
+    [...document.querySelectorAll('.court-box-name')].map((n) => n.textContent);
+
+  beforeEach(() => localStorage.clear());
+
+  describe('guards', () => {
+    it('reports a link missing its token', () => {
+      ready(buildState());
+      renderAt('m1');
+      expect(screen.getByText(/missing its match ID or token/)).toBeInTheDocument();
     });
-    renderAt('m1', 'good-token');
-    expect(screen.getByText('Reconnecting…')).toBeInTheDocument();
-  });
 
-  it('renders each side by full player name with the running score, serving info, and the sets summary', () => {
-    mockUseMatchState.mockReturnValue({
-      state: buildState(),
-      connected: true,
-      error: null,
-      ...noopHandlers,
-    });
-    renderAt('m1', 'good-token');
-    expect(screen.getByRole('button', { name: 'Alice: 3' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Bilal: 5' })).toBeInTheDocument();
-    expect(screen.getByText(/Serving: Side A/)).toBeInTheDocument();
-    expect(screen.getByText(/Sets — Alice 0 : 0 Bilal/)).toBeInTheDocument();
-  });
-
-  it('calls addPoint for the tapped side', async () => {
-    mockUseMatchState.mockReturnValue({
-      state: buildState(),
-      connected: true,
-      error: null,
-      ...noopHandlers,
-    });
-    renderAt('m1', 'good-token');
-
-    await userEvent.click(screen.getByRole('button', { name: 'Alice: 3' }));
-    expect(noopHandlers.addPoint).toHaveBeenCalledWith('A');
-
-    await userEvent.click(screen.getByRole('button', { name: 'Bilal: 5' }));
-    expect(noopHandlers.addPoint).toHaveBeenCalledWith('B');
-  });
-
-  it('collects the opening singles server before enabling scoring', async () => {
-    mockUseMatchState.mockReturnValue({
-      state: buildState({ serve: { servingSide: null, serverPlayerId: null, courtPositions: {} } }),
-      connected: true,
-      error: null,
-      ...noopHandlers,
-    });
-    renderAt('m1', 'good-token');
-
-    await userEvent.click(screen.getByRole('radio', { name: 'Side B' }));
-    await userEvent.selectOptions(screen.getByLabelText('First server (right court)'), 'b1');
-    await userEvent.click(screen.getByRole('button', { name: 'Start scoring' }));
-
-    expect(noopHandlers.startSet).toHaveBeenCalledWith('B', 'b1', undefined);
-  });
-
-  it('calls undoLastPoint when the undo button is tapped', async () => {
-    mockUseMatchState.mockReturnValue({
-      state: buildState(),
-      connected: true,
-      error: null,
-      ...noopHandlers,
-    });
-    renderAt('m1', 'good-token');
-
-    await userEvent.click(screen.getByRole('button', { name: 'Undo last point' }));
-    expect(noopHandlers.undoLastPoint).toHaveBeenCalled();
-  });
-
-  it('shows an interval banner during a mid-set break', () => {
-    mockUseMatchState.mockReturnValue({
-      state: buildState({ onInterval: true }),
-      connected: true,
-      error: null,
-      ...noopHandlers,
-    });
-    renderAt('m1', 'good-token');
-    expect(screen.getByRole('button', { name: /Interval/ })).toBeInTheDocument();
-  });
-
-  it('locks scoring and hides undo until an interval is resumed', () => {
-    mockUseMatchState.mockReturnValue({
-      state: buildState({ onInterval: true }),
-      connected: true,
-      error: null,
-      ...noopHandlers,
-    });
-    renderAt('m1', 'good-token');
-
-    expect(screen.getByRole('button', { name: 'Alice: 3' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Bilal: 5' })).toBeDisabled();
-    expect(screen.queryByRole('button', { name: 'Undo last point' })).not.toBeInTheDocument();
-  });
-
-  it('calls resumeFromInterval when the umpire taps the interval banner to end it', async () => {
-    mockUseMatchState.mockReturnValue({
-      state: buildState({ onInterval: true }),
-      connected: true,
-      error: null,
-      ...noopHandlers,
-    });
-    renderAt('m1', 'good-token');
-
-    await userEvent.click(screen.getByRole('button', { name: /Interval/ }));
-    expect(noopHandlers.resumeFromInterval).toHaveBeenCalled();
-  });
-
-  it('hides the interval banner once play has resumed', () => {
-    mockUseMatchState.mockReturnValue({
-      state: buildState({ onInterval: false }),
-      connected: true,
-      error: null,
-      ...noopHandlers,
-    });
-    renderAt('m1', 'good-token');
-    expect(screen.queryByRole('button', { name: /Interval/ })).not.toBeInTheDocument();
-  });
-
-  it('shows the completed score table, duration, and winner without serving or undo controls', () => {
-    const state = buildState({
-      matchWinner: 'B',
-      sets: [
-        {
-          setNumber: 1,
-          scoreA: 15,
-          scoreB: 21,
-          winner: 'B',
-          intervalTriggered: true,
-          intervalResumed: true,
-        },
-        {
-          setNumber: 2,
-          scoreA: 18,
-          scoreB: 21,
-          winner: 'B',
-          intervalTriggered: true,
-          intervalResumed: true,
-        },
-      ],
-    });
-    state.match.startedAt = '2026-08-29T10:00:00.000Z';
-    state.match.completedAt = '2026-08-29T10:02:30.000Z';
-    mockUseMatchState.mockReturnValue({
-      state,
-      connected: true,
-      error: null,
-      ...noopHandlers,
-    });
-    renderAt('m1', 'good-token');
-    expect(screen.getByText(/Bilal wins the match/)).toBeInTheDocument();
-    expect(screen.getByLabelText('Match score')).toBeInTheDocument();
-    expect(screen.getByText('Match time 2 min 30 sec')).toBeInTheDocument();
-    expect(document.querySelector('.match-summary-card')).not.toHaveTextContent(/^Set \d+$/);
-    expect(document.querySelector('.match-summary-card')).not.toHaveTextContent(/Serving: Side/);
-    expect(screen.queryByText('Serving now')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Undo last point' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Alice/ })).not.toBeInTheDocument();
-  });
-
-  it('falls back to the side letter when a side has no players yet', () => {
-    const state = buildState();
-    state.match.players = [];
-    mockUseMatchState.mockReturnValue({ state, connected: true, error: null, ...noopHandlers });
-    renderAt('m1', 'good-token');
-    expect(screen.getByRole('button', { name: 'A: 3' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'B: 5' })).toBeInTheDocument();
-  });
-
-  it('falls back to "Court Unassigned" when neither a court label nor an assigned court is known', () => {
-    const state = buildState();
-    state.match.assignedCourtId = null;
-    mockUseMatchState.mockReturnValue({ state, connected: true, error: null, ...noopHandlers });
-    renderAt('m1', 'good-token');
-    expect(screen.getByText('Court Unassigned')).toBeInTheDocument();
-  });
-
-  it('omits the match duration line for a winning match with no recorded start time', () => {
-    const state = buildState({ matchWinner: 'A' });
-    state.match.startedAt = null;
-    state.match.completedAt = null;
-    mockUseMatchState.mockReturnValue({ state, connected: true, error: null, ...noopHandlers });
-    renderAt('m1', 'good-token');
-    expect(screen.getByText(/Alice wins the match/)).toBeInTheDocument();
-    expect(screen.queryByText(/Match time/)).not.toBeInTheDocument();
-  });
-
-  it('computes the match duration against the current time when a winning match has no completedAt', () => {
-    const state = buildState({ matchWinner: 'A' });
-    state.match.startedAt = new Date().toISOString();
-    state.match.completedAt = null;
-    mockUseMatchState.mockReturnValue({ state, connected: true, error: null, ...noopHandlers });
-    renderAt('m1', 'good-token');
-    expect(screen.getByText(/Match time \d+ min \d+ sec/)).toBeInTheDocument();
-  });
-
-  it('shows "Right court" when the serving side is on an even score', () => {
-    const state = buildState({
-      currentSet: {
-        setNumber: 1,
-        scoreA: 4,
-        scoreB: 5,
-        winner: null,
-        intervalTriggered: false,
-        intervalResumed: false,
-      },
-      serve: { servingSide: 'A', serverPlayerId: 'a1', courtPositions: {} },
-    });
-    mockUseMatchState.mockReturnValue({ state, connected: true, error: null, ...noopHandlers });
-    renderAt('m1', 'good-token');
-    expect(screen.getByText('right court')).toBeInTheDocument();
-  });
-
-  it('marks side B as serving when it is side B on serve', () => {
-    const state = buildState({
-      currentSet: {
-        setNumber: 1,
-        scoreA: 3,
-        scoreB: 4,
-        winner: null,
-        intervalTriggered: false,
-        intervalResumed: false,
-      },
-      serve: { servingSide: 'B', serverPlayerId: 'b1', courtPositions: {} },
-    });
-    mockUseMatchState.mockReturnValue({ state, connected: true, error: null, ...noopHandlers });
-    renderAt('m1', 'good-token');
-    expect(document.querySelector('.serve-box.side-b')).toHaveClass('serving-player');
-    expect(screen.getAllByText('Serving now')).toHaveLength(1);
-  });
-
-  describe('doubles opening service', () => {
-    it('starts a doubles match once both right-court players and the first server are chosen', async () => {
+    it('surfaces a connection error', () => {
       mockUseMatchState.mockReturnValue({
-        state: buildDoublesState({
-          serve: { servingSide: null, serverPlayerId: null, courtPositions: {} },
-        }),
-        connected: true,
+        state: null,
+        connected: false,
+        error: 'nope',
+        ...noopHandlers,
+      });
+      renderAt('m1', 'tok');
+      expect(screen.getByText('nope')).toBeInTheDocument();
+    });
+
+    it('shows a connecting message before the first state arrives', () => {
+      mockUseMatchState.mockReturnValue({
+        state: null,
+        connected: false,
         error: null,
         ...noopHandlers,
       });
-      renderAt('m1', 'good-token');
+      renderAt('m1', 'tok');
+      expect(screen.getByText('Connecting…')).toBeInTheDocument();
+    });
 
-      await userEvent.selectOptions(screen.getByLabelText('Side A, right service court'), 'a1');
-      await userEvent.selectOptions(screen.getByLabelText('Side B, right service court'), 'b1');
-      await userEvent.selectOptions(screen.getByLabelText('First server (right court)'), 'a1');
-      await userEvent.click(screen.getByRole('button', { name: 'Start scoring' }));
+    it('reports a missing matchId when rendered outside its route', () => {
+      mockUseMatchState.mockReturnValue({
+        state: null,
+        connected: false,
+        error: null,
+        ...noopHandlers,
+      });
+      render(
+        <MemoryRouter initialEntries={['/umpire']}>
+          <Routes>
+            <Route path="/umpire" element={<UmpireScreen />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+      expect(screen.getByText(/missing its match ID or token/)).toBeInTheDocument();
+    });
 
+    it('shows a reconnecting indicator when the socket drops', () => {
+      ready(buildState(), { connected: false });
+      renderAt('m1', 'tok');
+      expect(screen.getByText('Reconnecting…')).toBeInTheDocument();
+    });
+  });
+
+  describe('scoring', () => {
+    it('shows both teams with their sets and current score', () => {
+      ready(
+        buildState({
+          currentSet: {
+            setNumber: 1,
+            scoreA: 7,
+            scoreB: 4,
+            winner: null,
+            intervalTriggered: false,
+            intervalResumed: false,
+          },
+          setsWon: { A: 1, B: 0 },
+        }),
+      );
+      renderAt('m1', 'tok');
+      // Names appear in both the header and a court box, so scope to the header.
+      expect([...document.querySelectorAll('.umpire-team-name')].map((n) => n.textContent)).toEqual(
+        ['Alice', 'Bilal'],
+      );
+      expect(
+        [...document.querySelectorAll('.umpire-team-score')].map((n) => n.textContent),
+      ).toEqual(['7', '4']);
+      expect([...document.querySelectorAll('.umpire-team-sets')].map((n) => n.textContent)).toEqual(
+        ['1', '0'],
+      );
+    });
+
+    it('shows the assigned court name, same as the TV screen', () => {
+      ready(buildState());
+      renderAt('m1', 'tok');
+      expect(screen.getByText('Court 1')).toBeInTheDocument();
+    });
+
+    it('falls back to a generic court label when none is assigned', () => {
+      const state = buildState();
+      state.match.courtLabel = null;
+      ready(state);
+      renderAt('m1', 'tok');
+      expect(screen.getByText('Court')).toBeInTheDocument();
+    });
+
+    it('awards the point to the side that owns the tapped end', async () => {
+      ready(buildState());
+      renderAt('m1', 'tok');
+      // Side A is drawn left in game 1, so the left button must score for A.
+      await userEvent.click(screen.getByLabelText('Point to Alice'));
+      expect(noopHandlers.addPoint).toHaveBeenCalledWith('A');
+      await userEvent.click(screen.getByLabelText('Point to Bilal'));
+      expect(noopHandlers.addPoint).toHaveBeenCalledWith('B');
+    });
+
+    it('shows the umpire call for the current score', () => {
+      ready(
+        buildState({
+          currentSet: {
+            setNumber: 1,
+            scoreA: 5,
+            scoreB: 4,
+            winner: null,
+            intervalTriggered: false,
+            intervalResumed: false,
+          },
+        }),
+      );
+      renderAt('m1', 'tok');
+      expect(screen.getByRole('status')).toHaveTextContent('5, 4');
+    });
+
+    it('prefixes the call with "Service over" when the serve just changed hands', () => {
+      ready(
+        buildState({
+          currentSet: {
+            setNumber: 1,
+            scoreA: 1,
+            scoreB: 0,
+            winner: null,
+            intervalTriggered: false,
+            intervalResumed: false,
+          },
+          serviceOver: true,
+        }),
+      );
+      renderAt('m1', 'tok');
+      expect(screen.getByRole('status')).toHaveTextContent('Service over, 1, love');
+    });
+
+    it('undoes the last point', async () => {
+      ready(
+        buildState({
+          currentSet: {
+            setNumber: 1,
+            scoreA: 1,
+            scoreB: 0,
+            winner: null,
+            intervalTriggered: false,
+            intervalResumed: false,
+          },
+        }),
+      );
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: 'Undo' }));
+      expect(noopHandlers.undoLastPoint).toHaveBeenCalled();
+    });
+
+    it('hides undo before any point has been scored', () => {
+      ready(
+        buildState({
+          currentSet: {
+            setNumber: 1,
+            scoreA: 0,
+            scoreB: 0,
+            winner: null,
+            intervalTriggered: false,
+            intervalResumed: false,
+          },
+        }),
+      );
+      renderAt('m1', 'tok');
+      expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+    });
+
+    const midGameInterval = () =>
+      buildState({
+        currentSet: {
+          setNumber: 1,
+          scoreA: 11,
+          scoreB: 4,
+          winner: null,
+          intervalTriggered: true,
+          intervalResumed: false,
+        },
+        onInterval: true,
+        interval: { kind: 'MID_GAME', seconds: 60 },
+      });
+
+    it('locks scoring during the interval and shows the 60-second countdown', () => {
+      ready(midGameInterval());
+      renderAt('m1', 'tok');
+      expect(screen.getByLabelText('Point to Alice')).toBeDisabled();
+      expect(screen.getByRole('button', { name: /Interval 1:00/ })).toBeInTheDocument();
+    });
+
+    it('asks before resuming, and only resumes once confirmed', async () => {
+      ready(midGameInterval());
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: /Interval/ }));
+      // The dialog is the gate: nothing has been sent yet.
+      expect(noopHandlers.resumeFromInterval).not.toHaveBeenCalled();
+      expect(screen.getByRole('alertdialog', { name: 'Resume play?' })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Resume' }));
+      expect(noopHandlers.resumeFromInterval).toHaveBeenCalled();
+    });
+
+    it('says the interval is over once the clock has run out', async () => {
+      ready(
+        buildState({
+          currentSet: {
+            setNumber: 1,
+            scoreA: 11,
+            scoreB: 4,
+            winner: null,
+            intervalTriggered: true,
+            intervalResumed: false,
+          },
+          onInterval: true,
+          interval: { kind: 'MID_GAME', seconds: 0 },
+        }),
+      );
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: /Interval/ }));
+      expect(screen.getByText('The interval is over.')).toBeInTheDocument();
+    });
+
+    it('backs out of the resume dialog without resuming', async () => {
+      ready(midGameInterval());
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: /Interval/ }));
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(noopHandlers.resumeFromInterval).not.toHaveBeenCalled();
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+
+    it('locks scoring for the longer break between games', () => {
+      ready(
+        buildState({
+          currentSet: {
+            setNumber: 2,
+            scoreA: 0,
+            scoreB: 0,
+            winner: null,
+            intervalTriggered: false,
+            intervalResumed: false,
+          },
+          setsWon: { A: 1, B: 0 },
+          interval: { kind: 'BETWEEN_GAMES', seconds: 120 },
+        }),
+      );
+      renderAt('m1', 'tok');
+      expect(screen.getByLabelText('Point to Alice')).toBeDisabled();
+      expect(screen.getByRole('button', { name: /Game interval 2:00/ })).toBeInTheDocument();
+    });
+
+    it('asks to start the next game after the between-games break', async () => {
+      ready(
+        buildState({
+          currentSet: {
+            setNumber: 2,
+            scoreA: 0,
+            scoreB: 0,
+            winner: null,
+            intervalTriggered: false,
+            intervalResumed: false,
+          },
+          setsWon: { A: 1, B: 0 },
+          interval: { kind: 'BETWEEN_GAMES', seconds: 120 },
+        }),
+      );
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: /Game interval/ }));
+      expect(screen.getByRole('alertdialog', { name: 'Start the next game?' })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Resume' }));
+      expect(noopHandlers.resumeFromInterval).toHaveBeenCalled();
+    });
+
+    it('ends the match early, awarding it to the chosen side', async () => {
+      ready(buildState());
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: 'End match' }));
+      expect(
+        screen.getByRole('alertdialog', { name: 'End this match early?' }),
+      ).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Bilal wins' }));
+      expect(noopHandlers.retireMatch).toHaveBeenCalledWith('B');
+    });
+
+    it('does not end the match when the retire dialog is dismissed', async () => {
+      ready(buildState());
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: 'End match' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(noopHandlers.retireMatch).not.toHaveBeenCalled();
+    });
+
+    it('advances the elapsed clock as the match runs', () => {
+      jest.useFakeTimers();
+      try {
+        const s = buildState();
+        s.match.startedAt = new Date(Date.now() - 10_000).toISOString();
+        ready(s);
+        renderAt('m1', 'tok');
+        expect(screen.getByLabelText('Elapsed match time')).toHaveTextContent('0 min 10 sec');
+        act(() => {
+          jest.advanceTimersByTime(5000);
+        });
+        expect(screen.getByLabelText('Elapsed match time')).toHaveTextContent('0 min 15 sec');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('shows the elapsed clock while the match runs', () => {
+      const s = buildState();
+      s.match.startedAt = new Date(Date.now() - 125_000).toISOString();
+      ready(s);
+      renderAt('m1', 'tok');
+      expect(screen.getByLabelText('Elapsed match time')).toHaveTextContent(/2 min 5 sec/);
+    });
+
+    it('announces the winner and stops offering point buttons', () => {
+      const s = buildState({ matchWinner: 'A', setsWon: { A: 2, B: 0 } });
+      s.match.completedAt = new Date(Date.parse(s.match.startedAt!) + 65_000).toISOString();
+      ready(s);
+      renderAt('m1', 'tok');
+      expect(screen.getByText('Alice wins the match')).toBeInTheDocument();
+      expect(screen.getByText(/Match time 1 min 5 sec/)).toBeInTheDocument();
+      expect(screen.queryByLabelText('Point to Alice')).not.toBeInTheDocument();
+      expect(screen.getByRole('status')).toHaveTextContent('Match won by Alice');
+    });
+
+    it('counts match time up to now while the result is in but the clock has not stopped', () => {
+      const s = buildState({ matchWinner: 'A' });
+      s.match.startedAt = new Date(Date.now() - 30_000).toISOString();
+      s.match.completedAt = null;
+      ready(s);
+      renderAt('m1', 'tok');
+      expect(screen.getByText(/Match time 0 min 3[01] sec/)).toBeInTheDocument();
+    });
+
+    it('replaces the court with a game-by-game summary once the match is won', () => {
+      ready(
+        buildState({
+          matchWinner: 'A',
+          setsWon: { A: 2, B: 1 },
+          sets: [
+            {
+              setNumber: 1,
+              scoreA: 21,
+              scoreB: 15,
+              winner: 'A',
+              intervalTriggered: true,
+              intervalResumed: true,
+            },
+            {
+              setNumber: 2,
+              scoreA: 18,
+              scoreB: 21,
+              winner: 'B',
+              intervalTriggered: true,
+              intervalResumed: true,
+            },
+            {
+              setNumber: 3,
+              scoreA: 21,
+              scoreB: 9,
+              winner: 'A',
+              intervalTriggered: true,
+              intervalResumed: true,
+            },
+          ],
+        }),
+      );
+      renderAt('m1', 'tok');
+      // The court is gone; the record replaces it.
+      expect(document.querySelector('.court-diagram')).toBeNull();
+      const summary = screen.getByLabelText('Match summary');
+      expect(summary).toBeInTheDocument();
+      expect(
+        [...summary.querySelectorAll('.tv-set-labels span')].map((n) => n.textContent),
+      ).toEqual(['', 'Set 1', 'Set 2', 'Set 3']);
+      // Winner's row is flagged, and so is each game they actually won.
+      const rows = [...summary.querySelectorAll('.tv-player-row')];
+      expect(rows[0]).toHaveClass('match-winner');
+      expect(rows[1]).not.toHaveClass('match-winner');
+      expect([...rows[0]!.querySelectorAll('.set-score-winner')].map((n) => n.textContent)).toEqual(
+        ['21', '21'],
+      );
+      expect([...rows[1]!.querySelectorAll('.set-score-winner')].map((n) => n.textContent)).toEqual(
+        ['21'],
+      );
+    });
+
+    it('requires the umpire to finalise a decided match', async () => {
+      ready(buildState({ matchWinner: 'A', setsWon: { A: 2, B: 0 } }));
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: 'Finalise match' }));
+      expect(noopHandlers.retireMatch).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole('button', { name: 'Finalise' }));
+      expect(noopHandlers.retireMatch).toHaveBeenCalledWith('A');
+    });
+
+    it('stops offering to finalise a match the umpire already signed off', () => {
+      const s = buildState({ matchWinner: 'A', setsWon: { A: 2, B: 0 }, finalised: true });
+      ready(s);
+      renderAt('m1', 'tok');
+      expect(screen.queryByRole('button', { name: 'Finalise match' })).not.toBeInTheDocument();
+    });
+
+    it('marks the retired side in the summary and in the result line', () => {
+      ready(buildState({ matchWinner: 'B', retiredSide: 'A', finalised: true }));
+      renderAt('m1', 'tok');
+      const summary = screen.getByLabelText('Match summary');
+      expect(summary.querySelector('.retired-tag')).toBeInTheDocument();
+      expect(
+        summary.querySelectorAll('.tv-player-row')[0]!.querySelector('.retired-tag'),
+      ).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Bilal wins the match');
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Alice retired');
+    });
+
+    it('shows no retirement marker for a match played out', () => {
+      ready(buildState({ matchWinner: 'B', finalised: true }));
+      renderAt('m1', 'tok');
+      expect(document.querySelector('.retired-tag')).toBeNull();
+    });
+
+    it('shows each side team and country in the header when present', () => {
+      const s = buildState();
+      s.match.teams = {
+        A: { name: 'Riverside', country: 'COL' },
+        B: { name: null, country: null },
+      };
+      ready(s);
+      renderAt('m1', 'tok');
+      expect(screen.getByText('Riverside · COL')).toBeInTheDocument();
+    });
+
+    it('omits the match time when the match never started', () => {
+      const s = buildState({ matchWinner: 'A' });
+      s.match.startedAt = null;
+      ready(s);
+      renderAt('m1', 'tok');
+      expect(screen.queryByText(/Match time/)).not.toBeInTheDocument();
+    });
+
+    it('falls back to the side letter when a side has no players', () => {
+      const s = buildState();
+      s.match.players = [{ playerId: 'a1', side: 'A', name: 'Alice', shortName: 'ALI' }];
+      ready(s);
+      renderAt('m1', 'tok');
+      expect(screen.getByText('Side B')).toBeInTheDocument();
+    });
+  });
+
+  describe('court diagram', () => {
+    it('puts the singles server in the right court on an even score', () => {
+      ready(
+        buildState({
+          currentSet: {
+            setNumber: 1,
+            scoreA: 4,
+            scoreB: 2,
+            winner: null,
+            intervalTriggered: false,
+            intervalResumed: false,
+          },
+        }),
+      );
+      renderAt('m1', 'tok');
+      expect(servingBoxName()).toBe('Alice');
+      // Mirrored halves: each player's right court is the lower box on the
+      // left half and the upper box on the right half, so the pair reads
+      // diagonally — which is what a service actually is.
+      expect(boxNames()).toEqual(['', 'Alice', 'Bilal', '']);
+    });
+
+    it('moves the singles server to the left court on an odd score', () => {
+      ready(
+        buildState({
+          currentSet: {
+            setNumber: 1,
+            scoreA: 5,
+            scoreB: 2,
+            winner: null,
+            intervalTriggered: false,
+            intervalResumed: false,
+          },
+        }),
+      );
+      renderAt('m1', 'tok');
+      expect(boxNames()).toEqual(['Alice', '', '', 'Bilal']);
+      expect(servingBoxName()).toBe('Alice');
+    });
+
+    it('highlights side B when side B is serving', () => {
+      ready(buildState({ serve: { servingSide: 'B', serverPlayerId: null, courtPositions: {} } }));
+      renderAt('m1', 'tok');
+      expect(servingBoxName()).toBe('Bilal');
+    });
+
+    it('places doubles partners from courtPositions and flags only the server', () => {
+      ready(
+        buildDoublesState({
+          currentSet: {
+            setNumber: 1,
+            scoreA: 3,
+            scoreB: 2,
+            winner: null,
+            intervalTriggered: false,
+            intervalResumed: false,
+          },
+          serve: {
+            servingSide: 'A',
+            serverPlayerId: 'a2',
+            courtPositions: { A: { right: 'a1', left: 'a2' }, B: { right: 'b1', left: 'b2' } },
+          },
+        }),
+      );
+      renderAt('m1', 'tok');
+      expect(boxNames()).toEqual(['Amy', 'Alice', 'Bilal', 'Ben']);
+      expect(servingBoxName()).toBe('Amy');
+      expect(document.querySelectorAll('.court-box-serving')).toHaveLength(1);
+    });
+
+    it('leaves a box blank when a recorded position names a player off the roster', () => {
+      ready(
+        buildDoublesState({
+          serve: {
+            servingSide: 'A',
+            serverPlayerId: 'a1',
+            courtPositions: { A: { right: 'a1', left: 'ghost' }, B: { right: 'b1', left: 'b2' } },
+          },
+        }),
+      );
+      renderAt('m1', 'tok');
+      expect(boxNames()).toEqual(['', 'Alice', 'Bilal', 'Ben']);
+    });
+
+    it('leaves a doubles box blank when positions are unknown', () => {
+      ready(
+        buildDoublesState({
+          serve: { servingSide: 'A', serverPlayerId: 'a1', courtPositions: {} },
+        }),
+      );
+      renderAt('m1', 'tok');
+      expect(boxNames()).toEqual(['', '', '', '']);
+      expect(servingBoxName()).toBeNull();
+    });
+
+    it('swaps ends every game, so game 2 draws side B on the left', () => {
+      ready(
+        buildState({
+          currentSet: {
+            setNumber: 2,
+            scoreA: 0,
+            scoreB: 0,
+            winner: null,
+            intervalTriggered: false,
+            intervalResumed: false,
+          },
+        }),
+      );
+      renderAt('m1', 'tok');
+      const names = [...document.querySelectorAll('.umpire-team-name')].map((n) => n.textContent);
+      expect(names).toEqual(['Bilal', 'Alice']);
+    });
+  });
+
+  describe('setup', () => {
+    const pending = { servingSide: null, serverPlayerId: null, courtPositions: {} } as const;
+
+    it('starts a singles match with the chosen end serving', async () => {
+      ready(buildState({ serve: pending }));
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: 'Start match' }));
+      expect(noopHandlers.startSet).toHaveBeenCalledWith('A', 'a1', undefined);
+    });
+
+    it('lets the umpire hand the opening serve to the other end', async () => {
+      ready(buildState({ serve: pending }));
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByLabelText('Right serves'));
+      await userEvent.click(screen.getByRole('button', { name: 'Start match' }));
+      expect(noopHandlers.startSet).toHaveBeenCalledWith('B', 'b1', undefined);
+    });
+
+    it('starts a doubles match with the right-court player serving', async () => {
+      ready(buildDoublesState({ serve: pending }));
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: 'Start match' }));
       expect(noopHandlers.startSet).toHaveBeenCalledWith('A', 'a1', {
         A: { right: 'a1', left: 'a2' },
         B: { right: 'b1', left: 'b2' },
       });
     });
 
-    it('does not start scoring if one side never got a right-court player assigned', () => {
-      mockUseMatchState.mockReturnValue({
-        state: buildDoublesState({
-          serve: { servingSide: null, serverPlayerId: null, courtPositions: {} },
-        }),
-        connected: true,
-        error: null,
-        ...noopHandlers,
+    it('swaps a pair between service courts, changing who serves first', async () => {
+      ready(buildDoublesState({ serve: pending }));
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByLabelText('Swap Alice / Amy service courts'));
+      await userEvent.click(screen.getByRole('button', { name: 'Start match' }));
+      expect(noopHandlers.startSet).toHaveBeenCalledWith('A', 'a2', {
+        A: { right: 'a2', left: 'a1' },
+        B: { right: 'b1', left: 'b2' },
       });
-      renderAt('m1', 'good-token');
+    });
 
-      // Bypasses the <select required> gate directly, the way a stale or
-      // scripted submit could — side B's right-court select was never
-      // touched, so its rightPlayerIds entry is still ''.
-      fireEvent.submit(document.querySelector('form.service-setup')!);
+    it('swaps ends and remembers the arrangement for the match', async () => {
+      ready(buildState({ serve: pending }));
+      const view = renderAt('m1', 'tok');
+      await userEvent.click(screen.getByLabelText('Swap ends'));
+      expect([...document.querySelectorAll('.umpire-team-name')].map((n) => n.textContent)).toEqual(
+        ['Bilal', 'Alice'],
+      );
+      expect(localStorage.getItem('courtside:ends:m1')).toBe('B');
+      // A refresh must not silently mirror the court back.
+      view.unmount();
+      renderAt('m1', 'tok');
+      expect([...document.querySelectorAll('.umpire-team-name')].map((n) => n.textContent)).toEqual(
+        ['Bilal', 'Alice'],
+      );
+    });
 
+    it('survives storage being unavailable', async () => {
+      const getItem = jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw new Error('blocked');
+      });
+      const setItem = jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new Error('blocked');
+      });
+      ready(buildState({ serve: pending }));
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByLabelText('Swap ends'));
+      expect(screen.getByRole('button', { name: 'Start match' })).toBeInTheDocument();
+      getItem.mockRestore();
+      setItem.mockRestore();
+    });
+
+    it('leaves positions alone when a doubles side is short a partner', async () => {
+      // Defensive: a half-filled doubles roster has nobody to swap with, so
+      // the control must be a no-op rather than blanking the court.
+      const s = buildDoublesState({ serve: pending });
+      s.match.players = s.match.players.filter((p) => p.playerId !== 'a2');
+      ready(s);
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByLabelText('Swap Alice service courts'));
+      await userEvent.click(screen.getByRole('button', { name: 'Start match' }));
+      expect(noopHandlers.startSet).toHaveBeenCalledWith('A', 'a1', {
+        A: { right: 'a1', left: '' },
+        B: { right: 'b1', left: 'b2' },
+      });
+    });
+
+    it('does not start a match for a side with no players', async () => {
+      const s = buildState({ serve: pending });
+      s.match.players = [{ playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' }];
+      ready(s);
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: 'Start match' }));
       expect(noopHandlers.startSet).not.toHaveBeenCalled();
     });
 
-    it('refuses to start scoring if the first server no longer matches the reassigned right-court player', async () => {
-      mockUseMatchState.mockReturnValue({
-        state: buildDoublesState({
-          serve: { servingSide: null, serverPlayerId: null, courtPositions: {} },
-        }),
-        connected: true,
-        error: null,
-        ...noopHandlers,
-      });
-      renderAt('m1', 'good-token');
-
-      await userEvent.selectOptions(screen.getByLabelText('Side A, right service court'), 'a1');
-      await userEvent.selectOptions(screen.getByLabelText('Side B, right service court'), 'b1');
-      await userEvent.selectOptions(screen.getByLabelText('First server (right court)'), 'a1');
-      // Reassign side A's right-court player without re-picking the first
-      // server — firstServerPlayerId is only reset when the serving side
-      // changes, so it's now stale relative to the new right-court pick.
-      await userEvent.selectOptions(screen.getByLabelText('Side A, right service court'), 'a2');
-
-      fireEvent.submit(document.querySelector('form.service-setup')!);
-
-      expect(noopHandlers.startSet).not.toHaveBeenCalled();
-    });
-  });
-
-  it('does not start scoring for singles if no first server was ever chosen', () => {
-    mockUseMatchState.mockReturnValue({
-      state: buildState({ serve: { servingSide: null, serverPlayerId: null, courtPositions: {} } }),
-      connected: true,
-      error: null,
-      ...noopHandlers,
-    });
-    renderAt('m1', 'good-token');
-
-    fireEvent.submit(document.querySelector('form.service-setup')!);
-
-    expect(noopHandlers.startSet).not.toHaveBeenCalled();
-  });
-
-  describe('doubles live serving text', () => {
-    it('names the server and their service court once scoring has started', () => {
-      const state = buildDoublesState({
-        serve: {
-          servingSide: 'A',
-          serverPlayerId: 'a1',
-          courtPositions: { A: { right: 'a1', left: 'a2' }, B: { right: 'b1', left: 'b2' } },
-        },
-      });
-      mockUseMatchState.mockReturnValue({ state, connected: true, error: null, ...noopHandlers });
-      renderAt('m1', 'good-token');
-      expect(screen.getByText(/Serving: Side A · Alice \(right court\)/)).toBeInTheDocument();
+    it('disables the point buttons until the opening serve is set', () => {
+      ready(buildState({ serve: pending }));
+      renderAt('m1', 'tok');
+      expect(screen.getByLabelText('Point to Alice')).toBeDisabled();
     });
 
-    it('names the server on the left court when they are not the right-court player', () => {
-      const state = buildDoublesState({
-        serve: {
-          servingSide: 'A',
-          serverPlayerId: 'a2',
-          courtPositions: { A: { right: 'a1', left: 'a2' }, B: { right: 'b1', left: 'b2' } },
-        },
-      });
-      mockUseMatchState.mockReturnValue({ state, connected: true, error: null, ...noopHandlers });
-      renderAt('m1', 'good-token');
-      expect(screen.getByText(/Serving: Side A · Amy \(left court\)/)).toBeInTheDocument();
-    });
-
-    it('falls back to a generic "service court" label when court positions are unknown for the serving side', () => {
-      const state = buildDoublesState({
-        serve: { servingSide: 'A', serverPlayerId: 'a1', courtPositions: {} },
-      });
-      mockUseMatchState.mockReturnValue({ state, connected: true, error: null, ...noopHandlers });
-      renderAt('m1', 'good-token');
-      expect(screen.getByText(/Serving: Side A · Alice \(service court\)/)).toBeInTheDocument();
+    it('offers no swap controls in singles', () => {
+      ready(buildState({ serve: pending }));
+      renderAt('m1', 'tok');
+      expect(document.querySelector('.court-swap')).toBeNull();
     });
   });
 });

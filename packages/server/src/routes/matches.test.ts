@@ -23,12 +23,17 @@ const validSinglesBody = {
   ],
   scoringConfig: { pointsToWin: 21, capScore: 30, intervalAt: 11 },
   courtId: 'court-required',
+  umpireId: 'umpire-required',
   tournamentId: 'tournament-required',
 };
 
 beforeEach(() => {
+  // One live match per court is now enforced, so each test needs a clean
+  // slate rather than inheriting the previous test's match on this court.
+  mockPrisma.reset();
   mockPrisma.seedTournament({ id: 'tournament-required' });
   mockPrisma.seedCourt({ id: 'court-required', tournamentId: 'tournament-required' });
+  mockPrisma.seedUmpire({ id: 'umpire-required', tournamentId: 'tournament-required' });
 });
 
 describe('POST /api/matches', () => {
@@ -108,6 +113,7 @@ describe('POST /api/matches', () => {
         ],
         scoringConfig: { pointsToWin: 21, capScore: 30, intervalAt: 11 },
         courtId: 'court-required',
+        umpireId: 'umpire-required',
         tournamentId: 'tournament-required',
       });
 
@@ -136,6 +142,66 @@ describe('POST /api/matches', () => {
     expect(updatedCourt?.currentMatchId).toBe(response.body.match.matchId);
   });
 
+  it('refuses a second match on a court that still has a live one', async () => {
+    const first = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(validSinglesBody);
+    expect(first.status).toBe(201);
+
+    const second = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(validSinglesBody);
+    expect(second.status).toBe(409);
+    expect(second.body.error).toMatch(/still in use/);
+  });
+
+  it('frees the court once the match on it is completed', async () => {
+    // Finalising is what releases a court, so a finished match must not
+    // block the next one.
+    mockPrisma.seedMatch({
+      id: 'done',
+      tournamentId: 'tournament-required',
+      assignedCourtId: 'court-required',
+      status: 'COMPLETED',
+    });
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(validSinglesBody);
+    expect(response.status).toBe(201);
+  });
+
+  it('accepts optional team names and countries, trimming blanks to null', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({
+        ...validSinglesBody,
+        teams: {
+          A: { name: '  Riverside  ', country: 'COL' },
+          B: { name: '   ', country: '' },
+        },
+      });
+    expect(response.status).toBe(201);
+    expect(response.body.match.teams).toEqual({
+      A: { name: 'Riverside', country: 'COL' },
+      B: { name: null, country: null },
+    });
+  });
+
+  it('defaults teams to null when the form omits them entirely', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(validSinglesBody);
+    expect(response.body.match.teams).toEqual({
+      A: { name: null, country: null },
+      B: { name: null, country: null },
+    });
+  });
+
   it('rejects a match with no court assignment', async () => {
     const { courtId: _courtId, ...bodyWithoutCourt } = validSinglesBody;
     const response = await request(buildApp())
@@ -154,6 +220,72 @@ describe('POST /api/matches', () => {
 
     expect(response.status).toBe(400);
     expect(response.body.error).toMatch(/court from this tournament/);
+  });
+
+  it('rejects a match with no umpire assignment', async () => {
+    const { umpireId: _umpireId, ...bodyWithoutUmpire } = validSinglesBody;
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(bodyWithoutUmpire);
+
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects a match assigned to an unknown umpire', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({ ...validSinglesBody, umpireId: 'not-an-umpire' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/umpire from this tournament/);
+  });
+
+  it('refuses to double-book an umpire already on a live match', async () => {
+    const first = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(validSinglesBody);
+    expect(first.status).toBe(201);
+
+    const otherCourt = mockPrisma.seedCourt({ tournamentId: 'tournament-required' });
+    const second = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({ ...validSinglesBody, courtId: otherCourt.id });
+    expect(second.status).toBe(409);
+    expect(second.body.error).toMatch(/already umpiring/);
+  });
+
+  it('frees the umpire once their match is completed', async () => {
+    mockPrisma.seedMatch({
+      id: 'done',
+      tournamentId: 'tournament-required',
+      assignedUmpireId: 'umpire-required',
+      status: 'COMPLETED',
+    });
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(validSinglesBody);
+    expect(response.status).toBe(201);
+  });
+
+  it('resolves the assigned umpire name onto the created match', async () => {
+    mockPrisma.seedUmpire({
+      id: 'umpire-required',
+      tournamentId: 'tournament-required',
+      name: 'Uma',
+    });
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(validSinglesBody);
+
+    expect(response.status).toBe(201);
+    expect(response.body.match.assignedUmpireId).toBe('umpire-required');
+    expect(response.body.match.umpireName).toBe('Uma');
   });
 });
 

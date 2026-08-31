@@ -7,6 +7,11 @@ import { loadMatchState } from '../match/replay.js';
 import { roomForCourt } from '../sockets/index.js';
 import type { Server } from 'socket.io';
 
+/** Blank and whitespace-only entries mean "no team", not an empty label. */
+function trimmedOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 export const matchesRouter = Router();
 let io: Server | null = null;
 
@@ -19,7 +24,10 @@ interface CreateMatchBody {
   players: Array<{ side: 'A' | 'B'; name: string; shortName?: string }>;
   scoringConfig: ScoringConfig;
   courtId?: string;
+  umpireId?: string;
   tournamentId?: string;
+  /** Optional per-side team name and country; both fields optional too. */
+  teams?: Partial<Record<'A' | 'B', { name?: string; country?: string }>>;
 }
 
 function isValidScoringConfig(config: ScoringConfig): boolean {
@@ -47,6 +55,7 @@ matchesRouter.post('/matches', adminAuth, async (req, res) => {
     !body.scoringConfig ||
     !isValidScoringConfig(body.scoringConfig) ||
     !body.courtId ||
+    !body.umpireId ||
     !body.tournamentId
   ) {
     res.status(400).json({ error: 'Invalid match payload.' });
@@ -59,16 +68,58 @@ matchesRouter.post('/matches', adminAuth, async (req, res) => {
     return;
   }
 
+  const umpire = await prisma.umpire.findUnique({ where: { id: body.umpireId } });
+  if (!umpire || umpire.tournamentId !== body.tournamentId) {
+    res.status(400).json({ error: 'Select an umpire from this tournament.' });
+    return;
+  }
+
+  // One match at a time per court. Without this the admin can queue several
+  // matches onto the same court, and Court.currentMatchId — which is what the
+  // TV subscribes to — silently follows only the newest of them.
+  const occupying = await prisma.match.findFirst({
+    where: {
+      assignedCourtId: body.courtId,
+      status: { in: ['CREATED', 'IN_PROGRESS'] },
+    },
+  });
+  if (occupying) {
+    res.status(409).json({
+      error: `${court.label} is still in use. Finalise the match on it before starting another.`,
+    });
+    return;
+  }
+
+  // Same one-at-a-time rule for the umpire — a person can't officiate two
+  // live matches at once.
+  const umpireBusy = await prisma.match.findFirst({
+    where: {
+      assignedUmpireId: body.umpireId,
+      status: { in: ['CREATED', 'IN_PROGRESS'] },
+    },
+  });
+  if (umpireBusy) {
+    res.status(409).json({
+      error: `${umpire.name} is already umpiring another match. Finalise it before assigning another.`,
+    });
+    return;
+  }
+
   const match = await prisma.match.create({
     data: {
       matchType: body.matchType,
       pointsToWin: body.scoringConfig.pointsToWin,
       capScore: body.scoringConfig.capScore,
       intervalAt: body.scoringConfig.intervalAt,
+      teamAName: trimmedOrNull(body.teams?.A?.name),
+      teamBName: trimmedOrNull(body.teams?.B?.name),
+      teamACountry: trimmedOrNull(body.teams?.A?.country),
+      teamBCountry: trimmedOrNull(body.teams?.B?.country),
       umpireToken: generateUmpireToken(),
       umpireCode: generateJoinCode(),
       tournamentId: body.tournamentId,
       assignedCourtId: body.courtId,
+      assignedUmpireId: body.umpireId,
       players: {
         create: body.players.map((p) => ({
           side: p.side,
@@ -136,6 +187,8 @@ matchesRouter.get('/matches', adminAuth, async (_req, res) => {
           status: state.match.status,
           assignedCourtId: state.match.assignedCourtId,
           courtLabel: state.match.courtLabel ?? null,
+          assignedUmpireId: state.match.assignedUmpireId,
+          umpireName: state.match.umpireName ?? null,
           createdAt: state.match.createdAt,
           startedAt: state.match.startedAt,
           completedAt: state.match.completedAt,
@@ -149,6 +202,7 @@ matchesRouter.get('/matches', adminAuth, async (_req, res) => {
             })),
             setsWon: state.derived.setsWon,
             matchWinner: state.derived.matchWinner,
+            retiredSide: state.derived.retiredSide,
           },
         },
       ];

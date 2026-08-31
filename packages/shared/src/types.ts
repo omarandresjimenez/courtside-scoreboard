@@ -51,6 +51,19 @@ export interface Tournament {
   date: string;
 }
 
+/** A person available to umpire matches within a tournament. */
+export interface Umpire {
+  umpireId: string;
+  tournamentId?: string | null;
+  name: string;
+}
+
+/** Optional identity a side plays under — a club, a school, a country. */
+export interface TeamIdentity {
+  name: string | null;
+  country: string | null;
+}
+
 export interface Match {
   matchId: string;
   tournamentId?: string | null;
@@ -60,6 +73,8 @@ export interface Match {
   /** Flips true on the first POINT event; locks matchType/scoringConfig edits. */
   scoringLocked: boolean;
   players: Player[];
+  /** Per-side team/country, both optional. */
+  teams: Record<Side, TeamIdentity>;
   /** Long random secret. Required on every umpire write action. */
   umpireToken: string;
   /** Short, human-typeable code that resolves to matchId + umpireToken on the /umpire join screen. */
@@ -68,6 +83,10 @@ export interface Match {
   assignedCourtId: string | null;
   /** Resolved court label for the live umpire and TV displays. */
   courtLabel?: string | null;
+  /** The umpire assigned to officiate this match. */
+  assignedUmpireId: string | null;
+  /** Resolved umpire name for the live umpire and TV displays. */
+  umpireName?: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -92,10 +111,13 @@ export interface MatchSummary {
   status: MatchStatus;
   assignedCourtId: string | null;
   courtLabel: string | null;
+  assignedUmpireId?: string | null;
+  umpireName?: string | null;
   createdAt: string;
   startedAt?: string | null;
   completedAt?: string | null;
   players: Player[];
+  teams?: Record<Side, TeamIdentity>;
   derived: DerivedMatchSummary;
 }
 
@@ -110,6 +132,8 @@ export interface DerivedMatchSummary {
   sets: MatchSetSummary[];
   setsWon: Record<Side, number>;
   matchWinner: Side | null;
+  /** Set when the match ended early; see DerivedMatchState.retiredSide. */
+  retiredSide?: Side | null;
 }
 
 export interface ScoreEvent {

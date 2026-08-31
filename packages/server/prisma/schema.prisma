@@ -41,6 +41,17 @@ model Tournament {
   createdAt DateTime @default(now())
   courts    Court[]
   matches   Match[]
+  umpires   Umpire[]
+}
+
+model Umpire {
+  id           String      @id @default(cuid())
+  tournamentId String?
+  tournament   Tournament? @relation(fields: [tournamentId], references: [id])
+  name         String
+  createdAt    DateTime    @default(now())
+
+  @@index([tournamentId])
 }
 
 model Match {
@@ -54,6 +65,13 @@ model Match {
   pointsToWin     Int
   capScore        Int
   intervalAt      Int
+  /// Team/club name per side, as announced. Optional: club play often has
+  /// none, while tournament play wants them on the TV wall.
+  teamAName       String?
+  teamBName       String?
+  /// Country each side represents, optional even when a team name is set.
+  teamACountry    String?
+  teamBCountry    String?
   /// Locks matchType/scoring fields the moment the first point is scored.
   scoringLocked   Boolean      @default(false)
   /// Long random secret; required on every umpire write action.
@@ -64,6 +82,9 @@ model Match {
   /// Last (or current) court this match was played on — for history,
   /// distinct from Court.currentMatchId which only reflects "right now".
   assignedCourtId String?
+  /// The umpire officiating this match — occupies them the same way a court
+  /// is occupied, so one person can't be double-booked onto two live matches.
+  assignedUmpireId String?
   createdAt       DateTime     @default(now())
   startedAt       DateTime?
   completedAt     DateTime?

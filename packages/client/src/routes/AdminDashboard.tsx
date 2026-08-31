@@ -6,7 +6,9 @@ import {
   type MatchStatePayload,
   type MatchSummary,
   type MatchType,
+  type Side,
   type ScoringPresetName,
+  type Umpire,
 } from '@courtside/shared';
 import { QRCodeSVG } from 'qrcode.react';
 import { copyToClipboard } from '../lib/clipboard.js';
@@ -64,6 +66,7 @@ function needsMatchDetail(match: MatchSummaryResponse): boolean {
 }
 
 function displayStatus(match: MatchSummary): string {
+  if (match.derived.retiredSide) return 'Finalized — retired';
   if (match.derived.matchWinner || match.status === 'COMPLETED') return 'Finalized';
   if (
     match.status === 'IN_PROGRESS' ||
@@ -109,23 +112,27 @@ export function AdminDashboard() {
     '';
   const tournamentName = new URLSearchParams(window.location.search).get('tournamentName') ?? '';
   const tournamentDate = new URLSearchParams(window.location.search).get('tournamentDate');
-  const [adminPassword, setAdminPassword] = useState(() => {
-    // The desktop app opens this URL with the password already in hand
-    // (it generated it) — no reason to make the person running it type or
-    // even see a password for their own local server.
+  const [adminPassword] = useState(() => {
+    // The desktop app opens this URL with the password already in hand, and
+    // a plain `npm run dev` server defaults to the same generic value (see
+    // config.ts) — this is a LAN-only, single-admin tool, so there's no
+    // password prompt to show or control to hide here.
     const fromUrl = new URLSearchParams(window.location.search).get('adminPassword');
-    return fromUrl || localStorage.getItem('courtside:adminPassword') || '';
+    return fromUrl || localStorage.getItem('courtside:adminPassword') || 'change-me';
   });
-  // Captured once at mount, not derived from adminPassword directly — the
-  // field must stay visible while someone is mid-way through typing a
-  // fresh password, not disappear the moment it becomes non-empty.
-  const [showPasswordField] = useState(() => !adminPassword);
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [courts, setCourts] = useState<Court[]>([]);
+  const [umpires, setUmpires] = useState<Umpire[]>([]);
   const [matchType, setMatchType] = useState<MatchType>('singles');
   const [preset, setPreset] = useState<ScoringPresetName>('standard');
   const [names, setNames] = useState({ a1: '', a2: '', b1: '', b2: '' });
   const [courtId, setCourtId] = useState('');
+  const [umpireId, setUmpireId] = useState('');
+  const [newUmpireName, setNewUmpireName] = useState('');
+  const [teams, setTeams] = useState<Record<Side, { name: string; country: string }>>({
+    A: { name: '', country: '' },
+    B: { name: '', country: '' },
+  });
   const [newCourtLabel, setNewCourtLabel] = useState('');
   const [status, setStatus] = useState<string | null>(null);
   const [lastCreated, setLastCreated] = useState<CreatedMatchLinks | null>(null);
@@ -167,6 +174,20 @@ export function AdminDashboard() {
     void refreshCourts();
   }
 
+  async function deleteUmpire(umpireIdToDelete: string) {
+    const res = await fetch(`/api/umpires/${umpireIdToDelete}`, {
+      method: 'DELETE',
+      headers: { 'x-admin-password': adminPassword },
+    });
+
+    if (!res.ok) {
+      setStatus((await res.json()).error ?? 'Failed to remove umpire.');
+      return;
+    }
+    setStatus('Umpire removed.');
+    void refreshUmpires();
+  }
+
   async function refreshMatches() {
     if (!adminPassword || !tournamentId) return;
     const res = await fetch(`/api/matches?tournamentId=${encodeURIComponent(tournamentId)}`, {
@@ -195,9 +216,18 @@ export function AdminDashboard() {
     if (res.ok) setCourts(await res.json());
   }
 
+  async function refreshUmpires() {
+    if (!adminPassword || !tournamentId) return;
+    const res = await fetch(`/api/umpires?tournamentId=${encodeURIComponent(tournamentId)}`, {
+      headers: { 'x-admin-password': adminPassword },
+    });
+    if (res.ok) setUmpires(await res.json());
+  }
+
   useEffect(() => {
     void refreshMatches();
     void refreshCourts();
+    void refreshUmpires();
     const refreshInterval = window.setInterval(() => void refreshMatches(), 5_000);
     return () => window.clearInterval(refreshInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-fetch whenever the password changes
@@ -220,6 +250,42 @@ export function AdminDashboard() {
     setNewCourtLabel('');
     void refreshCourts();
   }
+
+  async function createUmpire(e: React.FormEvent) {
+    e.preventDefault();
+    setStatus(null);
+
+    const res = await fetch('/api/umpires', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-password': adminPassword },
+      body: JSON.stringify({ name: newUmpireName, tournamentId }),
+    });
+
+    if (!res.ok) {
+      setStatus((await res.json()).error ?? 'Failed to add umpire.');
+      return;
+    }
+    setNewUmpireName('');
+    void refreshUmpires();
+  }
+
+  // Courts already holding a match that has not been finalised. Derived from
+  // the list the dashboard already polls, so it stays in step with the
+  // server rule that rejects a second match on the same court.
+  const occupiedCourtIds = new Set(
+    matches
+      .filter((m) => m.status === 'CREATED' || m.status === 'IN_PROGRESS')
+      .map((m) => m.assignedCourtId)
+      .filter((id): id is string => Boolean(id)),
+  );
+
+  // Same rule for umpires — one person can't officiate two live matches.
+  const occupiedUmpireIds = new Set(
+    matches
+      .filter((m) => m.status === 'CREATED' || m.status === 'IN_PROGRESS')
+      .map((m) => m.assignedUmpireId)
+      .filter((id): id is string => Boolean(id)),
+  );
 
   async function createMatch(e: React.FormEvent) {
     e.preventDefault();
@@ -252,7 +318,9 @@ export function AdminDashboard() {
         // placeholder for when that form lands, not dead code to delete.
         scoringConfig: preset === 'custom' ? SCORING_PRESETS.standard : SCORING_PRESETS[preset],
         courtId,
+        umpireId,
         tournamentId,
+        teams,
       }),
     });
 
@@ -277,6 +345,7 @@ export function AdminDashboard() {
       umpireCode: created.match.umpireCode,
     });
     setNames({ a1: '', a2: '', b1: '', b2: '' });
+    setTeams({ A: { name: '', country: '' }, B: { name: '', country: '' } });
     void refreshMatches();
     void refreshCourts();
   }
@@ -292,69 +361,115 @@ export function AdminDashboard() {
         <p className="field-error">Select a tournament in the desktop launcher first.</p>
       )}
 
-      {showPasswordField && (
-        <label>
-          Admin password
-          <input
-            type="password"
-            value={adminPassword}
-            onChange={(e) => setAdminPassword(e.target.value)}
-          />
-        </label>
+      {/* One shared status line for every admin action (add/remove a court
+          or umpire, create a match, copy a link) — rendered here, at the
+          top, so it's in the same predictable spot regardless of which
+          card the triggering action lives in. */}
+      {status && (
+        <p role="status" className="admin-status">
+          {status}
+        </p>
       )}
 
       {tournamentId && (
         <div className="admin-grid">
-          <section className="admin-card">
-            <form onSubmit={createCourt}>
-              <fieldset>
-                <legend>Add a court</legend>
-                <input
-                  placeholder="Court label (e.g. Court 1)"
-                  value={newCourtLabel}
-                  onChange={(e) => setNewCourtLabel(e.target.value)}
-                  required
-                />
-                <button type="submit">Add court</button>
-              </fieldset>
-            </form>
+          <div className="admin-column">
+            <section className="admin-card">
+              <h2>Courts</h2>
+              <form onSubmit={createCourt}>
+                <fieldset>
+                  <input
+                    aria-label="Court label"
+                    placeholder="Court label (e.g. Court 1)"
+                    value={newCourtLabel}
+                    onChange={(e) => setNewCourtLabel(e.target.value)}
+                    required
+                  />
+                  <button type="submit">Add court</button>
+                </fieldset>
+              </form>
 
-            <h2>Courts</h2>
-            {courts.length === 0 ? (
-              <p>No courts yet — add one above, then its TV link appears here.</p>
-            ) : (
-              <ul className="court-list">
-                {courts.map((c) => (
-                  <li key={c.courtId}>
-                    <div className="court-header">
-                      <span>{c.label}</span>
-                      <span className="status-tag">{c.currentMatchId ? 'Live' : 'Idle'}</span>
-                    </div>
-                    <span>
-                      Code on <a href="/tv">/tv</a>:{' '}
-                      <strong className="join-code">{c.tvCode}</strong>
-                    </span>
-                    <label>
-                      TV link
-                      <input readOnly value={tvLinkFor(c)} onFocus={(e) => e.target.select()} />
-                    </label>
-                    <div className="inline-actions">
-                      <button type="button" onClick={() => void handleCopy(tvLinkFor(c))}>
-                        Copy
-                      </button>
-                      <button
-                        type="button"
-                        className="danger-button"
-                        onClick={() => void deleteCourt(c.courtId)}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+              {courts.length === 0 ? (
+                <p>No courts yet — add one above, then its TV link appears here.</p>
+              ) : (
+                <ul className="court-list">
+                  {courts.map((c) => (
+                    <li key={c.courtId}>
+                      <div className="court-row-info">
+                        <span>{c.label}</span>
+                        <span className="status-tag">{c.currentMatchId ? 'Live' : 'Idle'}</span>
+                        <span>
+                          Code on <a href="/tv">/tv</a>:{' '}
+                          <strong className="join-code">{c.tvCode}</strong>
+                        </span>
+                      </div>
+                      <div className="court-row-actions">
+                        <input
+                          aria-label="TV link"
+                          readOnly
+                          value={tvLinkFor(c)}
+                          onFocus={(e) => e.target.select()}
+                        />
+                        <button type="button" onClick={() => void handleCopy(tvLinkFor(c))}>
+                          Copy
+                        </button>
+                        <button
+                          type="button"
+                          className="danger-button"
+                          onClick={() => void deleteCourt(c.courtId)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section className="admin-card">
+              <h2>Umpires</h2>
+              <form onSubmit={createUmpire}>
+                <fieldset>
+                  <input
+                    aria-label="Umpire name"
+                    placeholder="Name Lastname"
+                    value={newUmpireName}
+                    onChange={(e) => setNewUmpireName(e.target.value)}
+                    required
+                  />
+                  <button type="submit">Add umpire</button>
+                </fieldset>
+              </form>
+
+              {umpires.length === 0 ? (
+                <p>No umpires yet — add one above to assign them to matches.</p>
+              ) : (
+                <ul className="court-list">
+                  {umpires.map((u) => {
+                    const busy = occupiedUmpireIds.has(u.umpireId);
+                    return (
+                      <li key={u.umpireId}>
+                        <div className="court-header">
+                          <span>{u.name}</span>
+                          <span className="status-tag">{busy ? 'Busy' : 'Available'}</span>
+                        </div>
+                        <div className="inline-actions">
+                          <button
+                            type="button"
+                            className="danger-button"
+                            onClick={() => void deleteUmpire(u.umpireId)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+          </div>
 
           <section className="admin-card">
             <form onSubmit={createMatch}>
@@ -387,13 +502,67 @@ export function AdminDashboard() {
                   Court
                   <select value={courtId} onChange={(e) => setCourtId(e.target.value)} required>
                     <option value="">Choose court</option>
-                    {courts.map((c) => (
-                      <option key={c.courtId} value={c.courtId}>
-                        {c.label}
-                      </option>
-                    ))}
+                    {courts.map((c) => {
+                      const busy = occupiedCourtIds.has(c.courtId);
+                      return (
+                        <option key={c.courtId} value={c.courtId} disabled={busy}>
+                          {c.label}
+                          {busy ? ' — in use' : ''}
+                        </option>
+                      );
+                    })}
                   </select>
                 </label>
+
+                <label>
+                  Umpire
+                  <select value={umpireId} onChange={(e) => setUmpireId(e.target.value)} required>
+                    <option value="">Choose umpire</option>
+                    {umpires.map((u) => {
+                      const busy = occupiedUmpireIds.has(u.umpireId);
+                      return (
+                        <option key={u.umpireId} value={u.umpireId} disabled={busy}>
+                          {u.name}
+                          {busy ? ' — busy' : ''}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+                <div className="match-team-fields">
+                  {(['A', 'B'] as const).map((side) => (
+                    <fieldset key={side} className={`team-fieldset side-${side.toLowerCase()}`}>
+                      <legend>Side {side} team</legend>
+                      <label>
+                        Team
+                        <input
+                          value={teams[side].name}
+                          onChange={(e) =>
+                            setTeams((current) => ({
+                              ...current,
+                              [side]: { ...current[side], name: e.target.value },
+                            }))
+                          }
+                          placeholder="Optional"
+                        />
+                      </label>
+                      <label>
+                        Country
+                        <input
+                          value={teams[side].country}
+                          onChange={(e) =>
+                            setTeams((current) => ({
+                              ...current,
+                              [side]: { ...current[side], country: e.target.value },
+                            }))
+                          }
+                          placeholder="Optional"
+                        />
+                      </label>
+                    </fieldset>
+                  ))}
+                </div>
+
                 <div className="match-player-fields">
                   <label>
                     Side A player 1
@@ -440,8 +609,6 @@ export function AdminDashboard() {
                 <button type="submit">Create match</button>
               </fieldset>
             </form>
-
-            {status && <p role="status">{status}</p>}
 
             {lastCreated && (
               <div className="created-match-links">
@@ -503,6 +670,8 @@ export function AdminDashboard() {
                     m.courtLabel ??
                     courts.find((court) => court.courtId === m.assignedCourtId)?.label ??
                     'Court';
+                  const umpireName =
+                    m.umpireName ?? umpires.find((u) => u.umpireId === m.assignedUmpireId)?.name;
                   const duration = formatDuration(m.startedAt, m.completedAt);
                   return (
                     <li key={m.matchId}>
@@ -513,8 +682,13 @@ export function AdminDashboard() {
                       <small>
                         {courtName} · {new Date(m.createdAt).toLocaleString()}
                         {duration && ` · ${duration}`}
+                        {umpireName && ` · Umpire: ${umpireName}`}
                       </small>
-                      <div className="tv-scoreboard history-scoreboard" aria-label="Match score">
+                      <div
+                        className="tv-scoreboard history-scoreboard"
+                        aria-label="Match score"
+                        style={{ '--set-count': m.derived.sets.length } as React.CSSProperties}
+                      >
                         <div className="tv-set-labels" aria-hidden="true">
                           <span />
                           {m.derived.sets.map((set) => (
@@ -533,7 +707,12 @@ export function AdminDashboard() {
                               className={`tv-player-row side-${side.toLowerCase()}${m.derived.matchWinner === side ? ' match-winner' : ''}`}
                               key={side}
                             >
-                              <strong className="tv-player-name">{names || `Side ${side}`}</strong>
+                              <strong className="tv-player-name">
+                                {names || `Side ${side}`}
+                                {m.derived.retiredSide === side && (
+                                  <span className="retired-tag">Retired</span>
+                                )}
+                              </strong>
                               {m.derived.sets.map((set) => (
                                 <strong
                                   key={set.setNumber}

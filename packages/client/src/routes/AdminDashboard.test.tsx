@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Court, Match, MatchSummary } from '@courtside/shared';
+import type { Court, Match, MatchSummary, Umpire } from '@courtside/shared';
 import { QRCodeSVG } from 'qrcode.react';
 import { AdminDashboard } from './AdminDashboard.js';
 
@@ -16,6 +16,7 @@ const sampleMatches: MatchSummary[] = [
     assignedCourtId: 'c1',
     courtLabel: 'Court 1',
     createdAt: '2026-08-29T10:00:00.000Z',
+    teams: { A: { name: null, country: null }, B: { name: null, country: null } },
     players: [
       { playerId: 'a1', side: 'A', name: 'Alice', shortName: 'ALI' },
       { playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' },
@@ -32,6 +33,10 @@ const sampleCourts: Court[] = [
   { courtId: 'c1', label: 'Court 1', currentMatchId: null, tvCode: 'TVC001' },
 ];
 
+const sampleUmpires: Umpire[] = [
+  { umpireId: 'u1', tournamentId: 'tournament-1', name: 'Uma Umpire' },
+];
+
 function sampleCreatedMatch(overrides: Partial<Match> = {}): { match: Match; derived: unknown } {
   return {
     match: {
@@ -41,9 +46,11 @@ function sampleCreatedMatch(overrides: Partial<Match> = {}): { match: Match; der
       scoringConfig: { pointsToWin: 21, capScore: 30, intervalAt: 11 },
       scoringLocked: false,
       players: [],
+      teams: { A: { name: null, country: null }, B: { name: null, country: null } },
       umpireToken: 'tok-xyz',
       umpireCode: 'UMP001',
       assignedCourtId: null,
+      assignedUmpireId: null,
       createdAt: '',
       startedAt: null,
       completedAt: null,
@@ -63,10 +70,13 @@ function sampleCreatedMatch(overrides: Partial<Match> = {}): { match: Match; der
 function mockFetchRoutes(routes: {
   getMatches?: Response;
   getCourts?: Response;
+  getUmpires?: Response;
   getMatch?: Response;
   postMatches?: Response;
   postCourts?: Response;
+  postUmpires?: Response;
   deleteCourt?: Response;
+  deleteUmpire?: Response;
 }) {
   (global.fetch as jest.Mock).mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
@@ -77,22 +87,38 @@ function mockFetchRoutes(routes: {
       return routes.getMatch ?? jsonResponse(sampleCreatedMatch());
     if (pathname === '/api/courts' && method === 'GET')
       return routes.getCourts ?? jsonResponse(sampleCourts);
+    if (pathname === '/api/umpires' && method === 'GET')
+      return routes.getUmpires ?? jsonResponse(sampleUmpires);
     if (url === '/api/matches' && method === 'POST') {
       return routes.postMatches ?? jsonResponse(sampleCreatedMatch());
     }
     if (url === '/api/courts' && method === 'POST') {
       return routes.postCourts ?? jsonResponse(sampleCourts[0]);
     }
+    if (url === '/api/umpires' && method === 'POST') {
+      return routes.postUmpires ?? jsonResponse(sampleUmpires[0]);
+    }
     if (url.startsWith('/api/courts/') && method === 'DELETE') {
       return routes.deleteCourt ?? jsonResponse({});
+    }
+    if (url.startsWith('/api/umpires/') && method === 'DELETE') {
+      return routes.deleteUmpire ?? jsonResponse({});
     }
     throw new Error(`Unexpected fetch: ${method} ${url}`);
   });
 }
 
+// Both the court list and the umpire list render a "Remove" button, so a
+// bare role query is ambiguous — scope to the first (court) list, which
+// renders before the umpire one.
+function courtRemoveButton(): HTMLElement {
+  return within(document.querySelector('.court-list')!).getByRole('button', { name: 'Remove' });
+}
+
 async function selectCourt() {
   await screen.findByRole('option', { name: 'Court 1' });
   await userEvent.selectOptions(screen.getByLabelText('Court'), 'c1');
+  await userEvent.selectOptions(screen.getByLabelText('Umpire'), 'u1');
 }
 
 beforeEach(() => {
@@ -108,9 +134,20 @@ beforeEach(() => {
 });
 
 describe('AdminDashboard', () => {
-  it('does not fetch anything until an admin password is entered', () => {
+  it('never shows a password prompt — this is a single-admin, LAN-only tool', () => {
     render(<AdminDashboard />);
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Admin password')).not.toBeInTheDocument();
+  });
+
+  it('fetches immediately on mount, using the generic default password', async () => {
+    render(<AdminDashboard />);
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/matches?tournamentId=tournament-1',
+        expect.objectContaining({ headers: { 'x-admin-password': 'change-me' } }),
+      ),
+    );
   });
 
   it('picks up an admin password handed off via the URL (the desktop app flow)', async () => {
@@ -118,8 +155,6 @@ describe('AdminDashboard', () => {
 
     render(<AdminDashboard />);
 
-    // Picked up silently — no password field shown at all for this flow.
-    expect(screen.queryByLabelText('Admin password')).not.toBeInTheDocument();
     await waitFor(() =>
       expect(global.fetch).toHaveBeenCalledWith(
         '/api/matches?tournamentId=tournament-1',
@@ -184,18 +219,17 @@ describe('AdminDashboard', () => {
     mockFetchRoutes({ getMatches: jsonResponse(sampleMatches) });
 
     render(<AdminDashboard />);
-    await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
     await waitFor(() =>
       expect(global.fetch).toHaveBeenCalledWith('/api/matches?tournamentId=tournament-1', {
-        headers: { 'x-admin-password': 'secret' },
+        headers: { 'x-admin-password': 'change-me' },
       }),
     );
     await waitFor(() =>
       expect(document.querySelector('.history-list')).toHaveTextContent('singles'),
     );
     expect(document.querySelector('.history-list')).toHaveTextContent('Match ready');
-    expect(localStorage.getItem('courtside:adminPassword')).toBe('secret');
+    expect(localStorage.getItem('courtside:adminPassword')).toBe('change-me');
   });
 
   it('shows a scored match as in progress even when a stale server status is still created', async () => {
@@ -209,7 +243,6 @@ describe('AdminDashboard', () => {
     mockFetchRoutes({ getMatches: jsonResponse([scoredMatch]) });
 
     render(<AdminDashboard />);
-    await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
     expect(await screen.findByText('Match in progress')).toBeInTheDocument();
     expect(screen.queryByText('Match ready')).not.toBeInTheDocument();
@@ -250,7 +283,6 @@ describe('AdminDashboard', () => {
     });
 
     render(<AdminDashboard />);
-    await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
     expect(await screen.findByText('Alice', { selector: 'strong' })).toBeInTheDocument();
     expect(screen.getByText('Bilal', { selector: 'strong' })).toBeInTheDocument();
@@ -275,7 +307,6 @@ describe('AdminDashboard', () => {
     mockFetchRoutes({ getMatches: jsonResponse([completedMatch]) });
 
     render(<AdminDashboard />);
-    await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
     await waitFor(() =>
       expect(document.querySelector('.history-list')).toHaveTextContent('Finalized'),
@@ -298,7 +329,6 @@ describe('AdminDashboard', () => {
     });
 
     render(<AdminDashboard />);
-    await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
     await waitFor(() =>
       expect(document.querySelector('.history-list')).toHaveTextContent('Court 1'),
@@ -317,7 +347,6 @@ describe('AdminDashboard', () => {
     });
 
     render(<AdminDashboard />);
-    await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
     await waitFor(() => expect(document.querySelector('.history-list')).toHaveTextContent('Court'));
     expect(document.querySelector('.history-list')).not.toHaveTextContent('Court 1');
@@ -337,7 +366,6 @@ describe('AdminDashboard', () => {
     });
 
     render(<AdminDashboard />);
-    await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
     await waitFor(() =>
       expect(document.querySelector('.history-list')).toHaveTextContent('singles'),
@@ -364,7 +392,6 @@ describe('AdminDashboard', () => {
     });
 
     render(<AdminDashboard />);
-    await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
     await waitFor(() =>
       expect(document.querySelector('.history-list')).toHaveTextContent('Court 1'),
@@ -380,7 +407,6 @@ describe('AdminDashboard', () => {
     mockFetchRoutes({ getMatches: jsonResponse([inProgressMatch]) });
 
     render(<AdminDashboard />);
-    await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
     await waitFor(() =>
       expect(document.querySelector('.history-list')).toHaveTextContent(/\d+ min \d+ sec/),
@@ -392,7 +418,6 @@ describe('AdminDashboard', () => {
     mockFetchRoutes({ getMatches: jsonResponse([matchWithoutPlayers]) });
 
     render(<AdminDashboard />);
-    await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
     expect(await screen.findByText('Side A')).toBeInTheDocument();
     expect(screen.getByText('Side B')).toBeInTheDocument();
@@ -403,11 +428,10 @@ describe('AdminDashboard', () => {
     mockFetchRoutes({ getMatches: jsonResponse(sampleMatches) });
 
     render(<AdminDashboard />);
-    await userEvent.setup({ delay: null }).type(screen.getByLabelText('Admin password'), 'secret');
     await waitFor(() =>
       expect(global.fetch).toHaveBeenCalledWith(
         '/api/matches?tournamentId=tournament-1',
-        expect.objectContaining({ headers: { 'x-admin-password': 'secret' } }),
+        expect.objectContaining({ headers: { 'x-admin-password': 'change-me' } }),
       ),
     );
     const callsBeforePoll = (global.fetch as jest.Mock).mock.calls.length;
@@ -424,7 +448,6 @@ describe('AdminDashboard', () => {
     mockFetchRoutes({ getMatches: jsonResponse({ error: 'nope' }, false) });
 
     render(<AdminDashboard />);
-    await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     expect(screen.queryByText(/m1/)).not.toBeInTheDocument();
@@ -434,7 +457,6 @@ describe('AdminDashboard', () => {
     it('shows a placeholder message when there are no courts yet', async () => {
       mockFetchRoutes({ getCourts: jsonResponse([]) });
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
       expect(await screen.findByText(/No courts yet/)).toBeInTheDocument();
     });
@@ -445,7 +467,6 @@ describe('AdminDashboard', () => {
       });
 
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
       expect(await screen.findByText('Live')).toBeInTheDocument();
     });
@@ -454,7 +475,6 @@ describe('AdminDashboard', () => {
       mockFetchRoutes({ getCourts: jsonResponse(sampleCourts) });
 
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
 
       expect(await screen.findByText('Court 1', { selector: 'span' })).toBeInTheDocument();
       expect(screen.getByText('TVC001')).toBeInTheDocument();
@@ -471,7 +491,6 @@ describe('AdminDashboard', () => {
       mockFetchRoutes({ getCourts: jsonResponse(sampleCourts) });
 
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await screen.findByText('Court 1', { selector: 'span' });
 
       await userEvent.click(screen.getByRole('button', { name: 'Copy' }));
@@ -484,18 +503,17 @@ describe('AdminDashboard', () => {
       mockFetchRoutes({ getCourts: jsonResponse(sampleCourts) });
 
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await screen.findByText('Court 1', { selector: 'span' });
       mockFetchRoutes({ getCourts: jsonResponse([]) });
 
-      await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
+      await userEvent.click(courtRemoveButton());
 
       await waitFor(() =>
         expect(global.fetch).toHaveBeenCalledWith(
           '/api/courts/c1',
           expect.objectContaining({
             method: 'DELETE',
-            headers: { 'x-admin-password': 'secret' },
+            headers: { 'x-admin-password': 'change-me' },
           }),
         ),
       );
@@ -510,10 +528,9 @@ describe('AdminDashboard', () => {
       });
 
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await screen.findByText('Court 1', { selector: 'span' });
 
-      await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
+      await userEvent.click(courtRemoveButton());
 
       expect(await screen.findByText('Court is in use.')).toBeInTheDocument();
     });
@@ -525,10 +542,9 @@ describe('AdminDashboard', () => {
       });
 
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await screen.findByText('Court 1', { selector: 'span' });
 
-      await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
+      await userEvent.click(courtRemoveButton());
 
       expect(await screen.findByText('Failed to remove court.')).toBeInTheDocument();
     });
@@ -542,7 +558,6 @@ describe('AdminDashboard', () => {
       document.execCommand = jest.fn(() => false) as unknown as typeof document.execCommand;
 
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await screen.findByText('Court 1', { selector: 'span' });
 
       await userEvent.click(screen.getByRole('button', { name: 'Copy' }));
@@ -557,7 +572,6 @@ describe('AdminDashboard', () => {
 
     it('creates a court with the entered label and refreshes the list', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await userEvent.type(screen.getByPlaceholderText('Court label (e.g. Court 1)'), 'Court 2');
       mockFetchRoutes({
         postCourts: jsonResponse({ courtId: 'c2', label: 'Court 2', currentMatchId: null }),
@@ -579,7 +593,6 @@ describe('AdminDashboard', () => {
 
     it('shows the server error message when court creation fails', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await userEvent.type(screen.getByPlaceholderText('Court label (e.g. Court 1)'), 'Court 2');
       mockFetchRoutes({ postCourts: jsonResponse({ error: 'A court label is required.' }, false) });
 
@@ -590,7 +603,6 @@ describe('AdminDashboard', () => {
 
     it('falls back to a generic message when a failed court creation has no error field', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await userEvent.type(screen.getByPlaceholderText('Court label (e.g. Court 1)'), 'Court 2');
       mockFetchRoutes({ postCourts: jsonResponse({}, false) });
 
@@ -600,10 +612,134 @@ describe('AdminDashboard', () => {
     });
   });
 
+  describe('umpires', () => {
+    function umpireList(): HTMLElement {
+      return document.querySelectorAll('.court-list')[1] as HTMLElement;
+    }
+
+    it('shows a placeholder message when there are no umpires yet', async () => {
+      mockFetchRoutes({ getUmpires: jsonResponse([]) });
+      render(<AdminDashboard />);
+
+      expect(await screen.findByText(/No umpires yet/)).toBeInTheDocument();
+    });
+
+    it('lists an umpire as Available by default', async () => {
+      mockFetchRoutes({ getUmpires: jsonResponse(sampleUmpires) });
+
+      render(<AdminDashboard />);
+
+      expect(await screen.findByText('Uma Umpire', { selector: 'span' })).toBeInTheDocument();
+      expect(within(umpireList()).getByText('Available')).toBeInTheDocument();
+    });
+
+    it('shows an umpire as Busy when assigned to a live match', async () => {
+      mockFetchRoutes({
+        getUmpires: jsonResponse(sampleUmpires),
+        getMatches: jsonResponse([{ ...sampleMatches[0]!, assignedUmpireId: 'u1' }]),
+      });
+
+      render(<AdminDashboard />);
+
+      await screen.findByText('Uma Umpire', { selector: 'span' });
+      expect(within(umpireList()).getByText('Busy')).toBeInTheDocument();
+    });
+
+    it('creates an umpire with the entered name and refreshes the list', async () => {
+      render(<AdminDashboard />);
+      await userEvent.type(screen.getByPlaceholderText('Name Lastname'), 'Uma Umpire');
+      mockFetchRoutes({ postUmpires: jsonResponse(sampleUmpires[0]) });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add umpire' }));
+
+      await waitFor(() =>
+        expect(global.fetch).toHaveBeenCalledWith(
+          '/api/umpires',
+          expect.objectContaining({
+            method: 'POST',
+            body: JSON.stringify({ name: 'Uma Umpire', tournamentId: 'tournament-1' }),
+          }),
+        ),
+      );
+      expect(screen.getByPlaceholderText('Name Lastname')).toHaveValue('');
+    });
+
+    it('shows the server error message when umpire creation fails', async () => {
+      render(<AdminDashboard />);
+      await userEvent.type(screen.getByPlaceholderText('Name Lastname'), 'Uma Umpire');
+      mockFetchRoutes({
+        postUmpires: jsonResponse({ error: 'An umpire name is required.' }, false),
+      });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add umpire' }));
+
+      expect(await screen.findByText('An umpire name is required.')).toBeInTheDocument();
+    });
+
+    it('falls back to a generic message when a failed umpire creation has no error field', async () => {
+      render(<AdminDashboard />);
+      await userEvent.type(screen.getByPlaceholderText('Name Lastname'), 'Uma Umpire');
+      mockFetchRoutes({ postUmpires: jsonResponse({}, false) });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Add umpire' }));
+
+      expect(await screen.findByText('Failed to add umpire.')).toBeInTheDocument();
+    });
+
+    it('removes an umpire when Remove is clicked and refreshes the list', async () => {
+      mockFetchRoutes({ getUmpires: jsonResponse(sampleUmpires) });
+
+      render(<AdminDashboard />);
+      await screen.findByText('Uma Umpire', { selector: 'span' });
+      mockFetchRoutes({ getUmpires: jsonResponse([]) });
+
+      await userEvent.click(within(umpireList()).getByRole('button', { name: 'Remove' }));
+
+      await waitFor(() =>
+        expect(global.fetch).toHaveBeenCalledWith(
+          '/api/umpires/u1',
+          expect.objectContaining({
+            method: 'DELETE',
+            headers: { 'x-admin-password': 'change-me' },
+          }),
+        ),
+      );
+      expect(await screen.findByText('Umpire removed.')).toBeInTheDocument();
+      expect(await screen.findByText(/No umpires yet/)).toBeInTheDocument();
+    });
+
+    it('shows the server error message when umpire removal fails', async () => {
+      mockFetchRoutes({
+        getUmpires: jsonResponse(sampleUmpires),
+        deleteUmpire: jsonResponse({ error: 'Umpire is busy.' }, false),
+      });
+
+      render(<AdminDashboard />);
+      await screen.findByText('Uma Umpire', { selector: 'span' });
+
+      await userEvent.click(within(umpireList()).getByRole('button', { name: 'Remove' }));
+
+      expect(await screen.findByText('Umpire is busy.')).toBeInTheDocument();
+    });
+
+    it('falls back to a generic message when a failed umpire removal has no error field', async () => {
+      mockFetchRoutes({
+        getUmpires: jsonResponse(sampleUmpires),
+        deleteUmpire: jsonResponse({}, false),
+      });
+
+      render(<AdminDashboard />);
+      await screen.findByText('Uma Umpire', { selector: 'span' });
+
+      await userEvent.click(within(umpireList()).getByRole('button', { name: 'Remove' }));
+
+      expect(await screen.findByText('Failed to remove umpire.')).toBeInTheDocument();
+    });
+  });
+
   describe('creating a match', () => {
     it('creates a singles match with the entered names and standard preset by default', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await selectCourt();
       await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
       await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
@@ -615,7 +751,7 @@ describe('AdminDashboard', () => {
           '/api/matches',
           expect.objectContaining({
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-admin-password': 'secret' },
+            headers: { 'Content-Type': 'application/json', 'x-admin-password': 'change-me' },
             body: JSON.stringify({
               matchType: 'singles',
               players: [
@@ -624,7 +760,12 @@ describe('AdminDashboard', () => {
               ],
               scoringConfig: { pointsToWin: 21, capScore: 30, intervalAt: 11 },
               courtId: 'c1',
+              umpireId: 'u1',
               tournamentId: 'tournament-1',
+              teams: {
+                A: { name: '', country: '' },
+                B: { name: '', country: '' },
+              },
             }),
           }),
         ),
@@ -635,7 +776,6 @@ describe('AdminDashboard', () => {
 
     it('shows the umpire link once, built from the created match id and token', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await selectCourt();
       await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
       await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
@@ -670,7 +810,6 @@ describe('AdminDashboard', () => {
 
     it('renders a scannable QR code for the umpire link beside the join code', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await selectCourt();
       await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
       await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
@@ -694,7 +833,6 @@ describe('AdminDashboard', () => {
 
     it('encodes the umpire link itself, not some other value', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await selectCourt();
       await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
       await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
@@ -725,9 +863,88 @@ describe('AdminDashboard', () => {
       );
     });
 
+    it('flags a retired match in the history, on the side that retired', async () => {
+      const retired = JSON.parse(JSON.stringify(sampleMatches)) as typeof sampleMatches;
+      retired[0]!.status = 'COMPLETED';
+      retired[0]!.derived.matchWinner = 'B';
+      retired[0]!.derived.retiredSide = 'A';
+      mockFetchRoutes({ getMatches: jsonResponse(retired) });
+      render(<AdminDashboard />);
+      await waitFor(() =>
+        expect(document.querySelector('.history-list')).toHaveTextContent('Finalized — retired'),
+      );
+      const rows = document.querySelectorAll('.history-list .tv-player-row');
+      expect(rows[0]!.querySelector('.retired-tag')).toBeInTheDocument();
+      expect(rows[1]!.querySelector('.retired-tag')).toBeNull();
+    });
+
+    it('sends the team names and countries the admin typed', async () => {
+      render(<AdminDashboard />);
+      await selectCourt();
+      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
+      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      const teamInputs = screen.getAllByLabelText('Team');
+      const countryInputs = screen.getAllByLabelText('Country');
+      await userEvent.type(teamInputs[0]!, 'Riverside');
+      await userEvent.type(countryInputs[0]!, 'COL');
+      await userEvent.type(countryInputs[1]!, 'ESP');
+      mockFetchRoutes({ postMatches: jsonResponse(sampleCreatedMatch()) });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      const body = JSON.parse(
+        (
+          (global.fetch as jest.Mock).mock.calls.find((c) => c[0] === '/api/matches')?.[1] as {
+            body: string;
+          }
+        ).body,
+      );
+      expect(body.teams).toEqual({
+        A: { name: 'Riverside', country: 'COL' },
+        B: { name: '', country: 'ESP' },
+      });
+    });
+
+    it('disables a court that still has a live match on it', async () => {
+      // sampleMatches[0] is CREATED on court c1, so c1 is occupied until it
+      // is finalised — the same rule the server enforces on POST. The default
+      // mock returns an empty list, so hand it the fixture that occupies c1.
+      mockFetchRoutes({ getMatches: jsonResponse(sampleMatches) });
+      render(<AdminDashboard />);
+      // Wait for the match list to arrive, which is what marks c1 occupied.
+      // The empty-state row is also an <li>, so wait for a real match row.
+      await waitFor(() =>
+        expect(
+          document.querySelectorAll('.history-list li:not(.empty-state)').length,
+        ).toBeGreaterThan(0),
+      );
+      const option = screen
+        .getByLabelText('Court')
+        .querySelector<HTMLOptionElement>('option[value="c1"]');
+      expect(option).toBeDisabled();
+      expect(option).toHaveTextContent('in use');
+    });
+
+    it('disables an umpire that is already umpiring another live match', async () => {
+      mockFetchRoutes({
+        getUmpires: jsonResponse(sampleUmpires),
+        getMatches: jsonResponse([{ ...sampleMatches[0]!, assignedUmpireId: 'u1' }]),
+      });
+      render(<AdminDashboard />);
+      await waitFor(() =>
+        expect(
+          document.querySelectorAll('.history-list li:not(.empty-state)').length,
+        ).toBeGreaterThan(0),
+      );
+      const option = screen
+        .getByLabelText('Umpire')
+        .querySelector<HTMLOptionElement>('option[value="u1"]');
+      expect(option).toBeDisabled();
+      expect(option).toHaveTextContent('busy');
+    });
+
     it('uses the court label returned directly on the created match, when present', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await selectCourt();
       await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
       await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
@@ -744,9 +961,9 @@ describe('AdminDashboard', () => {
       mockFetchRoutes({ getCourts: jsonResponse(sampleCourts) });
 
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await screen.findByText('Court 1', { selector: 'span' });
       await userEvent.selectOptions(screen.getByLabelText('Court'), 'c1');
+      await userEvent.selectOptions(screen.getByLabelText('Umpire'), 'u1');
       await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
       await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
 
@@ -764,7 +981,6 @@ describe('AdminDashboard', () => {
 
     it('does not submit a match until a court is selected', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
       await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
 
@@ -779,7 +995,6 @@ describe('AdminDashboard', () => {
 
     it('shows extra name fields and sends 4 players for doubles', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await selectCourt();
       await userEvent.selectOptions(screen.getByLabelText('Match type'), 'doubles');
 
@@ -806,7 +1021,6 @@ describe('AdminDashboard', () => {
 
     it('uses the short preset scoring config when selected', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await selectCourt();
       await userEvent.selectOptions(screen.getByLabelText('Scoring format'), 'short');
       await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
@@ -827,7 +1041,6 @@ describe('AdminDashboard', () => {
 
     it('shows the server error message when creation fails', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await selectCourt();
       await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
       await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
@@ -840,7 +1053,6 @@ describe('AdminDashboard', () => {
 
     it('falls back to a generic message when a failed creation has no error field', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByLabelText('Admin password'), 'secret');
       await selectCourt();
       await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
       await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');

@@ -11,29 +11,37 @@ const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const nodeCrypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 
 const PORT = 3000;
-// Same unambiguous alphabet as the app's own join codes (see
-// packages/server/src/match/tokens.ts) — kept as a tiny local copy rather
-// than importing across the ESM/CJS boundary for one function.
-const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+// A single generic password rather than a per-install random one: this is
+// a LAN-only, single-admin tool (see Set 08 of the design spec), and typing
+// in a generated secret added friction with no real benefit here. Kept as
+// a named constant, matching the server's own default (see config.ts), so
+// the desktop app and a plain `npm run dev` server agree without any
+// configuration at all.
+const ADMIN_PASSWORD = 'change-me';
 
 let serverProcess = null;
 let launcherWindow = null;
 let currentConfig = null;
 let serverState = { status: 'starting', message: '' };
 
-function generatePassword(length = 10) {
-  const bytes = nodeCrypto.randomBytes(length);
-  let out = '';
-  for (let i = 0; i < length; i += 1) out += CODE_ALPHABET[bytes[i] % CODE_ALPHABET.length];
-  return out;
-}
-
 function resourcesPath() {
   return app.isPackaged ? process.resourcesPath : path.join(__dirname, '..', 'resources');
+}
+
+/**
+ * The Dock/taskbar icon while running from source (`npm start` / `electron .`).
+ * A packaged build already gets its icon baked into the .app/.exe by
+ * electron-builder (see build-assets/icon.icns|.ico in package.json's
+ * `build` config) — build-assets isn't copied into the packaged app's
+ * resources, so this only resolves to a real file in dev.
+ */
+function devIconPath() {
+  if (app.isPackaged) return null;
+  const file = process.platform === 'win32' ? 'icon.ico' : 'icon-1024.png';
+  return path.join(__dirname, '..', 'build-assets', file);
 }
 
 function serverEntryPath() {
@@ -61,16 +69,13 @@ function configPath() {
 }
 
 function loadOrCreateConfig() {
-  const file = configPath();
-  if (fs.existsSync(file)) {
-    try {
-      return JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch {
-      // Corrupt config file — fall through and write a fresh one below.
-    }
-  }
-  const cfg = { adminPassword: generatePassword() };
-  fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
+  // Always the fixed generic password (see ADMIN_PASSWORD above) — still
+  // written to disk so a config.json exists for any future per-install
+  // setting, and so an install that already has one from before this
+  // password stopped being randomly generated ends up on the fixed value
+  // too, rather than keeping its old random one forever.
+  const cfg = { adminPassword: ADMIN_PASSWORD };
+  fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2));
   return cfg;
 }
 
@@ -150,12 +155,14 @@ function stopServer() {
 }
 
 function createLauncherWindow() {
+  const icon = devIconPath();
   launcherWindow = new BrowserWindow({
     width: 540,
     height: 760,
     resizable: false,
     title: 'Courtside Scoreboard',
     backgroundColor: '#0a0e1a',
+    ...(icon ? { icon } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },
@@ -207,6 +214,9 @@ function openDashboard(tournament) {
 }
 
 app.whenReady().then(() => {
+  const icon = devIconPath();
+  if (icon && process.platform === 'darwin') app.dock?.setIcon(icon);
+
   const cfg = loadOrCreateConfig();
   startServer(cfg);
   createLauncherWindow();

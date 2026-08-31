@@ -37,7 +37,7 @@ Requires Node 20+ (see `.nvmrc`).
 
 ```bash
 npm install
-cp packages/server/.env.example packages/server/.env   # set a real ADMIN_PASSWORD
+cp packages/server/.env.example packages/server/.env   # ADMIN_PASSWORD optional, see below
 npm run prisma:migrate --workspace packages/server      # creates the local SQLite file
 npm run dev:server                                       # http://localhost:3000
 npm run dev:client                                        # http://localhost:5173, in a second terminal
@@ -45,6 +45,12 @@ npm run dev:client                                        # http://localhost:517
 
 The client dev server proxies `/api` and `/socket.io` to the server, so
 open the client URL and it talks to the server automatically.
+
+`ADMIN_PASSWORD` defaults to `change-me` if you don't set one. This is a
+LAN-only, single-admin tool — the admin dashboard never shows a password
+prompt, it just picks the password up automatically (from the desktop
+app, or from this default), so there's nothing to type or configure for
+normal use.
 
 ## Running this for a real match
 
@@ -171,16 +177,23 @@ on staged files.
 
 ## What's scaffolded vs. what's next
 
-Working end-to-end: creating courts and matches from the admin dashboard
-(optionally assigning a match to a court at creation), the umpire and TV
-links surfaced right after creation (the umpire link only once — the server
-never re-serves that token), the scoring engine (including undo,
-configurable formats, and doubles serve rotation), and the umpire → server →
-TV real-time score sync over Socket.io.
+Working end-to-end: creating courts, umpires, and matches from the admin
+dashboard (a match requires picking both a court and an umpire, each
+blocked from double-booking while they're on a live match), optional team
+name/country per side, the umpire and TV links surfaced right after
+creation (the umpire link only once — the server never re-serves that
+token), the full scoring engine (undo, configurable formats, doubles serve
+rotation and court-position setup, mid-game and between-games intervals
+with a countdown the umpire can resume early, retirement with the retired
+side labeled on every summary screen), and the umpire → server → TV
+real-time score sync over Socket.io. The umpire screen is a visual court
+diagram modeled on official umpire apps — see
+`docs/umpire-screen-spec.md` for the reference behaviour it follows. The
+TV screen scales to the actual display and is built without CSS Grid
+`subgrid`, which most smart TV browsers don't support (see HANDOFF.md).
 
 Stubbed for the next pass: reassigning an _existing_ match to a court after
-the fact, `START_SET` (doubles first-server/court-position setup),
-`RESUME_FROM_INTERVAL`, `RETIRE_MATCH`, and the admin `EDIT_*` /
-`CANCEL_MATCH` / `ASSIGN_MATCH_TO_COURT` socket events — the event names and
-payload shapes are already defined in `packages/shared/src/events.ts`, only
-the handlers need writing in `packages/server/src/sockets/index.ts`.
+the fact, and the admin `EDIT_MATCH_DETAILS` / `EDIT_SCORING_CONFIG` /
+`CANCEL_MATCH` / `ASSIGN_MATCH_TO_COURT` socket events — the event names
+and payload shapes are already defined in `packages/shared/src/events.ts`,
+only the handlers need writing in `packages/server/src/sockets/index.ts`.

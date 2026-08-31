@@ -23,6 +23,9 @@ export async function loadMatchState(matchId: string): Promise<MatchStatePayload
   const court = record.assignedCourtId
     ? await prisma.court.findUnique({ where: { id: record.assignedCourtId } })
     : null;
+  const umpire = record.assignedUmpireId
+    ? await prisma.umpire.findUnique({ where: { id: record.assignedUmpireId } })
+    : null;
 
   const events: ScoreEvent[] = record.events.map((row) => {
     const payload = row.payload ? (JSON.parse(row.payload) as Record<string, unknown>) : {};
@@ -69,10 +72,16 @@ export async function loadMatchState(matchId: string): Promise<MatchStatePayload
       name: p.name,
       shortName: p.shortName,
     })),
+    teams: {
+      A: { name: record.teamAName, country: record.teamACountry },
+      B: { name: record.teamBName, country: record.teamBCountry },
+    },
     umpireToken: record.umpireToken,
     umpireCode: record.umpireCode,
     assignedCourtId: record.assignedCourtId,
     courtLabel: court?.label ?? null,
+    assignedUmpireId: record.assignedUmpireId,
+    umpireName: umpire?.name ?? null,
     createdAt: record.createdAt.toISOString(),
     startedAt: record.startedAt?.toISOString() ?? timestampToIso(startedEvent),
     completedAt: record.completedAt?.toISOString() ?? timestampToIso(completedEvent),

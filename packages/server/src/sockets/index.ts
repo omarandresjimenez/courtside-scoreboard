@@ -5,6 +5,7 @@ import {
   UMPIRE_EVENTS,
   type AddPointPayload,
   type ResumeFromIntervalPayload,
+  type RetireMatchPayload,
   type StartSetPayload,
   type SubscribeCourtPayload,
   type UndoLastPointPayload,
@@ -47,9 +48,9 @@ export async function createScoreEventIdempotent(
  * write re-derives the full match state from the event log before
  * broadcasting it — see @courtside/shared's deriveMatchState().
  *
- * ADD_POINT, UNDO_LAST_POINT, and RESUME_FROM_INTERVAL are wired end-to-end
- * below. START_SET, RETIRE_MATCH, and the ADMIN_EVENTS (edit details, edit
- * scoring config, cancel, assign to court) are the next pass — see
+ * ADD_POINT, UNDO_LAST_POINT, START_SET, RESUME_FROM_INTERVAL and
+ * RETIRE_MATCH are wired end-to-end below. The ADMIN_EVENTS (edit details,
+ * edit scoring config, cancel, assign to court) are the next pass — see
  * "Set 09 — Admin & tournament dashboard" in the design doc.
  */
 export function registerSocketHandlers(io: Server): void {
@@ -80,6 +81,18 @@ export function registerSocketHandlers(io: Server): void {
           matchId: payload.matchId,
           eventId: payload.eventId,
           type: 'UNDO_LAST_POINT',
+          timestamp: BigInt(Date.now()),
+        }),
+      );
+    });
+
+    socket.on(UMPIRE_EVENTS.RETIRE_MATCH, (payload: RetireMatchPayload) => {
+      void withAuthorizedMatch(io, socket, payload.matchId, () =>
+        createScoreEventIdempotent({
+          matchId: payload.matchId,
+          eventId: payload.eventId,
+          type: 'RETIRE',
+          side: payload.winnerSide,
           timestamp: BigInt(Date.now()),
         }),
       );
@@ -215,7 +228,9 @@ async function withAuthorizedMatch(
   const state = await loadMatchState(matchId);
   if (!state) return;
 
-  if (state.derived.matchWinner && state.match.status !== 'COMPLETED') {
+  // A match is over when the umpire says so, not when the arithmetic says
+  // so — winning the deciding game only offers the umpire a Finalise button.
+  if (state.derived.finalised && state.match.status !== 'COMPLETED') {
     await prisma.match.update({
       where: { id: matchId },
       data: { status: 'COMPLETED', completedAt: new Date() },
@@ -225,7 +240,7 @@ async function withAuthorizedMatch(
       where: { id: matchId },
       data: { status: 'IN_PROGRESS', startedAt: new Date() },
     });
-  } else if (!state.derived.matchWinner && state.match.status === 'COMPLETED') {
+  } else if (!state.derived.finalised && state.match.status === 'COMPLETED') {
     await prisma.match.update({
       where: { id: matchId },
       data: { status: 'IN_PROGRESS', completedAt: null },

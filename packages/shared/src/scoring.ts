@@ -23,8 +23,17 @@ export interface SetResult {
   winner: Side | null;
   /** True once either score has reached scoringConfig.intervalAt this set. */
   intervalTriggered: boolean;
-  /** True once the umpire has dismissed this set's interval break. */
+  /** True once the umpire has dismissed this set's mid-game interval break. */
   intervalResumed: boolean;
+  /**
+   * True once the umpire has dismissed the between-games break that opens
+   * this set (irrelevant for set 1, which has no break before it). Tracked
+   * separately from `intervalResumed` — they are two different breaks, and
+   * conflating them into one flag meant dismissing the opening break also
+   * silently pre-dismissed this set's own mid-game interval later on.
+   * Optional so existing SetResult literals need not specify it.
+   */
+  openingBreakResumed?: boolean;
 }
 
 export interface ServeState {
@@ -32,6 +41,25 @@ export interface ServeState {
   /** Meaningful for doubles; null for singles or before the first serve. */
   serverPlayerId: string | null;
   courtPositions: CourtPositions;
+}
+
+/**
+ * Badminton has two kinds of break, and they are not the same length:
+ * a mid-game interval when the leader first reaches the interval score,
+ * and a longer break between games. The final game has no break after it —
+ * there is no next game to break before.
+ */
+export type IntervalKind = 'MID_GAME' | 'BETWEEN_GAMES';
+
+export const INTERVAL_SECONDS: Record<IntervalKind, number> = {
+  MID_GAME: 60,
+  BETWEEN_GAMES: 120,
+};
+
+export interface IntervalState {
+  kind: IntervalKind;
+  /** How long the break runs, in seconds. */
+  seconds: number;
 }
 
 export interface DerivedMatchState {
@@ -42,7 +70,37 @@ export interface DerivedMatchState {
   /** Null until a side has won 2 sets (or a RETIRE event declares one). */
   matchWinner: Side | null;
   serve: ServeState;
+  /**
+   * True during a mid-game interval only, so existing consumers (the TV
+   * banner, the umpire's point lock) keep their original meaning.
+   */
   onInterval: boolean;
+  /**
+   * The break currently in effect, of either kind, or null when play is
+   * live. The umpire may resume early; this only says a break is owed.
+   */
+  interval: IntervalState | null;
+  /**
+   * True when the rally just played moved the serve to the other side —
+   * what the umpire prefixes with "Service over". Derived from the current
+   * set's point stack rather than tracked through the replay, so it stays
+   * correct after an undo for free (the stack is already the authority on
+   * who serves: the side that won the last point serves the next one).
+   */
+  serviceOver: boolean;
+  /**
+   * A RETIRE event has been recorded — the umpire has signed the match off,
+   * either finalising a decided match or ending one early. Winning the
+   * deciding game sets `matchWinner`, but only this makes the match over:
+   * the umpire always has the last word.
+   */
+  finalised: boolean;
+  /**
+   * The side that retired, when the match was ended early rather than won.
+   * Null when the match ran its course — finalising an already-decided match
+   * is also a RETIRE event, but nobody retired, so this stays null.
+   */
+  retiredSide: Side | null;
 }
 
 const otherSide = (side: Side): Side => (side === 'A' ? 'B' : 'A');
@@ -55,6 +113,7 @@ function emptySet(setNumber: number): SetResult {
     winner: null,
     intervalTriggered: false,
     intervalResumed: false,
+    openingBreakResumed: false,
   };
 }
 
@@ -94,13 +153,17 @@ export function deriveMatchState(
   let matchWinner: Side | null = null;
   let courtPositions: CourtPositions = {};
   let servingSide: Side | null = null;
+  let finalised = false;
+  let retiredSide: Side | null = null;
   let firstServerPlayerId: string | null = null;
   let firstServerSide: Side | null = null;
 
   for (const event of events) {
-    // A stray event after completion is ignored, except the undo that's
-    // meant to reverse the very point that ended the match.
-    if (matchWinner && event.type !== 'UNDO_LAST_POINT') continue;
+    // A stray event after completion is ignored, with two exceptions: the
+    // undo that reverses the very point that ended the match, and the RETIRE
+    // the umpire signs a decided match off with — which arrives precisely
+    // when a winner already exists.
+    if (matchWinner && event.type !== 'UNDO_LAST_POINT' && event.type !== 'RETIRE') continue;
 
     switch (event.type) {
       case 'START_SET': {
@@ -127,12 +190,26 @@ export function deriveMatchState(
       }
 
       case 'RETIRE': {
-        if (event.side) matchWinner = event.side;
+        if (event.side) {
+          // Only a retirement that *decides* the match retires anyone; the
+          // same event arriving after a winner exists is the umpire signing
+          // off a match that was already won on court.
+          if (!matchWinner) retiredSide = otherSide(event.side);
+          matchWinner = event.side;
+        }
+        finalised = true;
         break;
       }
 
       case 'RESUME_INTERVAL': {
-        current.intervalResumed = true;
+        // The same event dismisses either break; which one is currently
+        // showing is unambiguous from the score — a set only sits at 0-0
+        // with a prior completed set while its own opening break is up,
+        // since intervalAt is always greater than zero.
+        const isOpeningBreak =
+          completedSets.length > 0 && current.scoreA === 0 && current.scoreB === 0;
+        if (isOpeningBreak) current.openingBreakResumed = true;
+        else current.intervalResumed = true;
         break;
       }
 
@@ -231,13 +308,43 @@ export function deriveMatchState(
       ) ?? (servingSide === firstServerSide ? firstServerPlayerId : null))
     : null;
 
+  const currentStack = pointStacksBySet[setIndex]!;
+  const serviceOver =
+    currentStack.length >= 2
+      ? currentStack[currentStack.length - 1] !== currentStack[currentStack.length - 2]
+      : // The first point of a set changes hands only if the side that won it
+        // is not the side that opened the serve.
+        currentStack.length === 1 && firstServerSide !== null
+        ? currentStack[0] !== firstServerSide
+        : false;
+
+  const midGameInterval = current.intervalTriggered && !current.intervalResumed && !matchWinner;
+  // Between games: the previous game is decided, the next has not started,
+  // and the umpire has not resumed yet. There is no break after the last
+  // game, which `matchWinner` already excludes.
+  const betweenGames =
+    !matchWinner &&
+    completedSets.length > 0 &&
+    current.scoreA === 0 &&
+    current.scoreB === 0 &&
+    !current.openingBreakResumed;
+  const interval: IntervalState | null = midGameInterval
+    ? { kind: 'MID_GAME', seconds: INTERVAL_SECONDS.MID_GAME }
+    : betweenGames
+      ? { kind: 'BETWEEN_GAMES', seconds: INTERVAL_SECONDS.BETWEEN_GAMES }
+      : null;
+
   return {
     sets: matchWinner ? completedSets : [...completedSets, current],
     currentSet: current,
     setsWon,
     matchWinner,
     serve: { servingSide, serverPlayerId, courtPositions },
-    onInterval: current.intervalTriggered && !current.intervalResumed && !matchWinner,
+    onInterval: midGameInterval,
+    interval,
+    serviceOver,
+    finalised,
+    retiredSide,
   };
 }
 

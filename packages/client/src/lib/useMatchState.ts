@@ -24,6 +24,11 @@ interface UseMatchStateResult {
     courtPositions?: CourtPositions,
   ) => void;
   resumeFromInterval: () => void;
+  /**
+   * Ends the match immediately, awarding it to `winnerSide` — a retirement,
+   * or the umpire finalising a match the scoring engine has already decided.
+   */
+  retireMatch: (winnerSide: Side) => void;
 }
 
 /**
@@ -111,6 +116,14 @@ export function useMatchState(
         firstServerSide,
         firstServerPlayerId,
         ...(courtPositions ? { courtPositions } : {}),
+      });
+    },
+    retireMatch: (winnerSide) => {
+      if (!('matchId' in options)) return;
+      socketRef.current?.emit(UMPIRE_EVENTS.RETIRE_MATCH, {
+        matchId: options.matchId,
+        eventId: generateEventId(),
+        winnerSide,
       });
     },
     resumeFromInterval: () => {
