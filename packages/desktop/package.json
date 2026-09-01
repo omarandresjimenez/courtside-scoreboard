@@ -28,6 +28,7 @@
     },
     "npmRebuild": false,
     "buildDependenciesFromSource": false,
+    "afterSign": "scripts/fix-mac-signature.js",
     "files": [
       "src/**/*",
       "!**/node_modules/*"
@@ -96,7 +97,8 @@
       ],
       "category": "public.app-category.sports",
       "hardenedRuntime": false,
-      "icon": "build-assets/icon.icns"
+      "icon": "build-assets/icon.icns",
+      "identity": null
     },
     "win": {
       "target": [

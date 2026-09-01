@@ -21,6 +21,13 @@ const PORT = 3000;
 // the desktop app and a plain `npm run dev` server agree without any
 // configuration at all.
 const ADMIN_PASSWORD = 'change-me';
+// Bumped only when a release needs to replace an incompatible empty/legacy
+// database (see ensureDatabase()) — not on every schema change. A per-user
+// database created by an older install can predate a Prisma model added
+// since (observed on Windows: `P2021 The table main.Tournament does not
+// exist`), and unlike the server's own dev workflow, a packaged app has no
+// `prisma migrate` available to fix it in place at runtime.
+const DATABASE_TEMPLATE_VERSION = 1;
 
 let serverProcess = null;
 let launcherWindow = null;
@@ -57,6 +64,14 @@ function clientDistPath() {
 }
 
 function tsxCliPath() {
+  if (app.isPackaged) {
+    // main.js itself runs from inside app.asar in a packaged build, so
+    // require.resolve() below would search relative to the archive and
+    // fail to find tsx at all — it was copied to a real, external
+    // node_modules next to the other extraResources instead (see
+    // package.json's `build.extraResources`), not into the asar.
+    return path.join(process.resourcesPath, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  }
   // tsx's package.json doesn't `export` ./dist/cli.mjs directly, so this
   // resolves the package root (which IS exported) and does plain path
   // math from there instead of asking Node to resolve the deep subpath.
@@ -68,22 +83,62 @@ function configPath() {
   return path.join(app.getPath('userData'), 'config.json');
 }
 
-function loadOrCreateConfig() {
-  // Always the fixed generic password (see ADMIN_PASSWORD above) — still
-  // written to disk so a config.json exists for any future per-install
-  // setting, and so an install that already has one from before this
-  // password stopped being randomly generated ends up on the fixed value
-  // too, rather than keeping its old random one forever.
-  const cfg = { adminPassword: ADMIN_PASSWORD };
+function saveConfig(cfg) {
   fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2));
+}
+
+function loadOrCreateConfig() {
+  const file = configPath();
+  let stored = {};
+  if (fs.existsSync(file)) {
+    try {
+      stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      // Corrupt config file — fall through and write a fresh one below.
+    }
+  }
+  const cfg = {
+    // Always the fixed generic password (see ADMIN_PASSWORD above) — an
+    // install that already has one from before this password stopped
+    // being randomly generated ends up on the fixed value too, rather
+    // than keeping its old random one forever.
+    adminPassword: ADMIN_PASSWORD,
+    // Carried over from any existing config, defaulting to 0 (older than
+    // any real template) rather than the current version — an install
+    // from before this field existed must still go through
+    // ensureDatabase()'s upgrade check, not be assumed already current.
+    databaseTemplateVersion: stored.databaseTemplateVersion ?? 0,
+  };
+  saveConfig(cfg);
   return cfg;
 }
 
-function ensureDatabase() {
+function ensureDatabase(cfg) {
   const dbPath = path.join(app.getPath('userData'), 'courtside.db');
+  const templatePath = path.join(resourcesPath(), 'template.db');
+
   if (!fs.existsSync(dbPath)) {
-    fs.copyFileSync(path.join(resourcesPath(), 'template.db'), dbPath);
+    fs.copyFileSync(templatePath, dbPath);
+    cfg.databaseTemplateVersion = DATABASE_TEMPLATE_VERSION;
+    saveConfig(cfg);
+    return dbPath;
   }
+
+  if (cfg.databaseTemplateVersion !== DATABASE_TEMPLATE_VERSION) {
+    // This per-user database predates a Prisma model added since it was
+    // created — Prisma throws (observed: P2021, "table does not exist")
+    // rather than working with a stale schema, and a packaged app has no
+    // `prisma migrate` to fix it in place at runtime. Keep the old file
+    // as a backup rather than deleting it: it's the umpire's own match
+    // history, not disposable, even though this recovery path doesn't
+    // attempt to merge its contents into the new one.
+    const backupPath = path.join(app.getPath('userData'), `courtside.legacy-${Date.now()}.db`);
+    fs.renameSync(dbPath, backupPath);
+    fs.copyFileSync(templatePath, dbPath);
+    cfg.databaseTemplateVersion = DATABASE_TEMPLATE_VERSION;
+    saveConfig(cfg);
+  }
+
   return dbPath;
 }
 
@@ -109,7 +164,7 @@ function notifyLauncher() {
 
 function startServer(cfg) {
   currentConfig = cfg;
-  const dbPath = ensureDatabase();
+  const dbPath = ensureDatabase(cfg);
   serverState = { status: 'starting', message: '' };
 
   serverProcess = spawn(process.execPath, [tsxCliPath(), serverEntryPath()], {

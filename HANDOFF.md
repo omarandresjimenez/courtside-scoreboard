@@ -684,3 +684,148 @@ if this app keeps evolving.
 | Tournament API routes          | `packages/server/src/routes/tournaments.ts`                                  |
 | Windows source zip helper      | `packages/desktop/scripts/pack-windows-source.js`                            |
 | Desktop app icon               | `packages/desktop/build-assets/` (`icon-source.html` is the editable source) |
+
+## Packaged desktop recovery: `tsx`, legacy SQLite databases, and a broken Mac signature
+
+Found on a real Windows install; both fixes below are now implemented in
+`packages/desktop/src/main.js` and verified (see each section). They're
+platform-neutral on purpose — both problems happen because Electron runs a
+packaged application differently from `npm start`, not because of Windows
+itself, and a third, Mac-only signing bug turned up while verifying the fix
+actually launches a real packaged app rather than just reading the diff.
+
+### 1. Resolve `tsx` from the external resource directory when packaged
+
+The server is launched with Electron's bundled Node runtime and `tsx`:
+
+```js
+spawn(process.execPath, [tsxCliPath(), serverEntryPath()], {
+  env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' /* runtime configuration */ },
+});
+```
+
+`electron-builder` copies production server dependencies, including `tsx`, to
+`resources/node_modules`. The Electron main process itself runs from
+`resources/app.asar`, so `require.resolve('tsx/package.json')` searches the
+wrong place in a packaged build and fails before the server can start.
+
+`tsxCliPath()` now branches on `app.isPackaged`:
+
+```js
+if (app.isPackaged) {
+  return path.join(process.resourcesPath, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+}
+```
+
+`process.resourcesPath` is the Electron-supported cross-platform location, so
+this covers both the Windows installer and the macOS `.app` bundle from one
+code path — confirmed the file exists at exactly that path in a freshly built
+macOS `.app`'s `Contents/Resources/node_modules/tsx/dist/cli.mjs`. Before
+shipping a new platform target, do the same check for its own build.
+
+### 2. Upgrade an old per-user database once, with a backup
+
+The launcher used to copy `resources/template.db` to the user's data
+directory only when `courtside.db` didn't already exist yet — so an older
+install kept whatever database it was created with even after an app update
+added a new Prisma model. The observed result was Prisma error `P2021`:
+`The table main.Tournament does not exist`.
+
+`DATABASE_TEMPLATE_VERSION` (a constant in `main.js`) and
+`databaseTemplateVersion` (persisted in `config.json`) make this upgrade
+explicit. When the stored version differs from the bundled version,
+`ensureDatabase(cfg)`:
+
+1. Renames the existing `courtside.db` to `courtside.legacy-<timestamp>.db`.
+2. Copies the current bundled `template.db` into place.
+3. Saves the new template version in `config.json`.
+
+The upgrade runs once per template version; it does not touch the database on
+ordinary launches once the versions match. Increment
+`DATABASE_TEMPLATE_VERSION` only when a release needs to replace an
+incompatible empty or legacy database — for a future migration where
+user-entered data must be retained, add a real migration path instead of
+bumping this version; the recovery mechanism deliberately keeps the old
+database as a backup file but never merges its contents into the new one.
+
+**Verified directly**, not just read: copied this project's own
+pre-Tournament-model backup database (`courtside.db.pre-tournament-model.bak`,
+missing both `Tournament` and `Umpire`) into an isolated `--user-data-dir`
+with no `config.json`, launched `electron .` against it, and confirmed —
+`config.json` was created with `databaseTemplateVersion` at the current
+value, the old file was renamed to `courtside.legacy-<timestamp>.db` (not
+deleted), the new `courtside.db` has every current table, and
+`GET /api/tournaments` returned `[]` instead of throwing P2021. Also
+confirmed the _non_-upgrade path is a no-op: pre-seeding `config.json` with
+today's `databaseTemplateVersion` on a real, already-current database left
+it completely untouched on the next launch.
+
+### 3. A separate bug found while verifying the above: the Mac build's signature was corrupted, not just unsigned
+
+Discovered by actually launching a freshly built `.app` rather than trusting
+that a successful `electron-builder` run means a working one.
+`spctl --assess` reported:
+
+```
+code has no resources but signature indicates they must be present
+```
+
+That's a different, worse failure than the "unsigned app" warning documented
+below — Gatekeeper refuses to even show the warning for a corrupted
+signature, so the ordinary right-click → Open override doesn't help, and the
+app fails to launch with **no window and no error output at all**. Root
+cause: with no Developer ID identity available, `electron-builder` skips its
+own signing step (`mac.identity: null` in `package.json`'s `build` config
+makes this explicit rather than an auto-detected fallback), but the
+_prebuilt_ `Electron.app` binary it repackages already carries its own
+baked-in ad-hoc signature from Electron's own build. `extraResources`
+(the server, `node_modules`, `template.db`, the icon, ...) get copied into
+`Contents/Resources` _after_ that signature was applied, which invalidates
+its resource seal without replacing it — setting `identity: null` alone does
+**not** fix this, since the stale signature was never electron-builder's own
+to control.
+
+Fixed with an `afterSign` hook
+(`packages/desktop/scripts/fix-mac-signature.js`, wired via
+`build.afterSign` in `package.json`) that re-signs the packaged `.app`
+ad-hoc (`codesign --force --deep --sign -`) after `electron-builder` finishes
+copying everything into place. Confirmed the verdict changes from the
+corrupted-signature error above to the ordinary `rejected` — the ordinary
+"this app is from an unidentified developer, right-click → Open to run it
+anyway" state documented in README.md's "Code signing" section, not a hard
+failure.
+
+**Not fully verified end-to-end**: launching the rebuilt `.app` from this
+environment still hits Gatekeeper's block, and the CLI escape hatch
+(`spctl --add`) has been removed on this macOS version — overriding it
+requires the actual GUI right-click → Open flow (or the System Settings →
+Privacy & Security → "Open Anyway" button), which needs a human at the
+keyboard. Whoever picks this up next should do that once, by hand, on a
+freshly built `.app`, and confirm the launcher window actually appears and
+the server actually starts — the `spctl` verdict alone only proves the
+signature is no longer corrupted, not that the app runs.
+
+### macOS handoff checklist
+
+- Preserve all three fixes in `packages/desktop/src/main.js` /
+  `package.json` / `scripts/fix-mac-signature.js`; do not fork the launcher
+  logic by operating system.
+- Build the client and generate Prisma before packaging:
+  `npm run build --workspace packages/client` and
+  `npx prisma generate --schema=packages/server/prisma/schema.prisma`.
+- Build macOS with `npm run dist:mac --workspace packages/desktop`.
+- Run `spctl --assess --verbose` on the built `.app` — it should say
+  `rejected`, never the "code has no resources..." message. If that message
+  comes back, the `afterSign` hook isn't running or isn't finding the app
+  (check `context.packager.appInfo.productFilename` still matches the actual
+  built folder name if `productName` ever changes).
+- **Actually launch the built `.app`** (right-click → Open the first time)
+  and confirm the launcher window appears — a clean `electron-builder` exit
+  code does not mean the app opens; this is exactly how the signature bug
+  above went unnoticed until someone actually tried.
+- On a clean install, confirm the launcher reaches its running state and
+  `GET /api/tournaments` returns an empty array with the admin-password header.
+- For upgrade coverage, launch an older build first (or place a deliberately
+  schema-less `courtside.db` in the app user-data folder), then launch the new
+  build. Confirm a timestamped `courtside.legacy-*.db` backup exists and the
+  new database serves `/api/tournaments` without Prisma `P2021`.

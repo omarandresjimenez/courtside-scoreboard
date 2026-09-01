@@ -157,7 +157,6 @@ legend {
 
 .join-screen form {
   display: flex;
-  gap: 0.75rem;
   flex-wrap: wrap;
   justify-content: center;
   align-items: center;
@@ -171,6 +170,10 @@ legend {
   font-family: ui-monospace, monospace;
   width: 9ch;
   padding: 0.6rem 0.5rem;
+  /* Margin, not the form's flex `gap` — covers both the side-by-side case
+     and the wrapped-to-its-own-line case with one declaration, and some
+     TV browsers don't apply flex `gap` at all. */
+  margin: 0 0.75rem 0.75rem 0;
 }
 
 .field-error {
