@@ -975,6 +975,7 @@ button.banner:active {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
+  font-size: clamp(1rem, 2vh, 1.6rem);
 }
 
 .match-team-fields {
@@ -1011,12 +1012,15 @@ button.banner:active {
 
 .tv-screen {
   min-height: 100vh;
-  padding: 4vh 4vw;
+  /* Tight outer padding/gap — a TV is read from across a room, so the
+     scoreboard itself (see .tv-scoreboard) should claim the screen rather
+     than these chrome elements around it. */
+  padding: 1vh 3vw;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3vh;
+  gap: 1vh;
   text-align: center;
   animation: fade-in 0.4s ease;
 }
@@ -1028,6 +1032,11 @@ button.banner:active {
 
 .tv-header {
   justify-content: center;
+}
+
+.tv-header .summary-pill {
+  font-size: clamp(0.95rem, 1.8vh, 1.4rem);
+  padding: 0.4rem 0.9rem;
 }
 
 .tv-meta {
@@ -1108,7 +1117,10 @@ button.banner:active {
 .tv-set-labels > span,
 .tv-player-row > strong,
 .tv-player-name {
-  min-height: clamp(4.25rem, 17vh, 13rem);
+  /* Two player rows plus the set-label row should fill ~90% of the screen
+     height between them — see .tv-set-labels > span below for its own
+     (smaller) share of that budget. */
+  min-height: clamp(7rem, 36vh, 30rem);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1117,9 +1129,9 @@ button.banner:active {
 }
 
 .tv-set-labels > span {
-  min-height: clamp(2.5rem, 5vh, 4.5rem);
+  min-height: clamp(3rem, 7.5vh, 6.5rem);
   color: var(--text-dim);
-  font-size: clamp(0.82rem, 1.6vh, 1.3rem);
+  font-size: clamp(1.1rem, 2.6vh, 2rem);
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -1136,10 +1148,23 @@ button.banner:active {
 .tv-player-name {
   justify-content: flex-start;
   gap: 0.65rem;
-  padding: 0.75rem 1rem;
+  padding: 0.75rem 1.5rem;
   color: var(--text);
-  font-size: clamp(1.8rem, 6vh, 5rem);
+  font-size: clamp(2.5rem, 10vh, 8rem);
   font-weight: 700;
+}
+
+.tv-screen .team-identity {
+  font-size: clamp(0.9rem, 1.8vh, 1.4rem);
+}
+
+.tv-screen .serve-marker {
+  font-size: clamp(0.85rem, 1.6vh, 1.3rem);
+  padding: 0.25rem 0.6rem;
+}
+
+.tv-screen .retired-tag {
+  font-size: clamp(0.75rem, 1.4vh, 1.1rem);
 }
 
 .tv-player-row.side-a .tv-player-name {
@@ -1171,7 +1196,7 @@ button.banner:active {
    live current-set score below and the player names above them, so the
    eye lands on what the match actually hinges on right now. */
 .tv-player-row > strong {
-  font-size: clamp(2rem, 5.5vh, 4.25rem);
+  font-size: clamp(2.75rem, 10vh, 7rem);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1183,7 +1208,7 @@ button.banner:active {
 /* The live score of the set in progress — the headline number on the
    whole screen. */
 .tv-player-row > strong.current-set {
-  font-size: clamp(3.5rem, 13vh, 10rem);
+  font-size: clamp(5rem, 25vh, 18rem);
   font-weight: 800;
 }
 
@@ -1191,13 +1216,29 @@ button.banner:active {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1.25rem;
-  margin-top: 1.25rem;
+  gap: 0.4rem;
+  margin-top: 0.2rem;
+}
+
+.match-complete button {
+  padding: 0.4rem 0.85rem;
+  font-size: 0.9rem;
 }
 
 .match-complete h1,
 .match-complete p {
   margin: 0;
+}
+
+/* Compact deliberately: at this point the large completed-set scoreboard
+   above already tells the story — this is just a closing line, not another
+   thing competing for the screen's height budget. */
+.match-complete h1 {
+  font-size: clamp(1.75rem, 3.5vh, 3rem);
+}
+
+.match-complete p {
+  font-size: clamp(0.85rem, 1.6vh, 1.15rem);
 }
 
 .history-scoreboard {
