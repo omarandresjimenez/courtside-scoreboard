@@ -852,10 +852,10 @@ describe('AdminDashboard', () => {
       const { container } = render(
         <QRCodeSVG
           value="http://localhost/umpire/m-42?token=secret-tok"
-          size={84}
+          size={64}
           bgColor="#ffffff"
           fgColor="#0a0e1a"
-          marginSize={2}
+          marginSize={1}
         />,
       );
       expect(renderedPath).toEqual(

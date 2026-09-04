@@ -18,6 +18,10 @@ interface CreatedMatchLinks {
   courtLabel: string | null;
   umpireLink: string;
   umpireCode: string;
+  /** Court-side phone link — camera only, no score. */
+  streamBroadcastLink: string;
+  /** Internet-facing link — video plus the live score overlay. */
+  streamViewLink: string;
 }
 
 type MatchSummaryResponse = Partial<MatchSummary> &
@@ -96,6 +100,23 @@ function umpireLinkFor(match: Pick<Match, 'matchId' | 'umpireToken'>): string {
 
 function tvLinkFor(court: Pick<Court, 'courtId'>): string {
   return absoluteUrl(`/tv/court/${court.courtId}`);
+}
+
+function streamBroadcastLinkFor(match: Pick<Match, 'assignedCourtId'>): string {
+  if (!match.assignedCourtId) return '#';
+  const path = `/stream/court/${match.assignedCourtId}`;
+  // Camera capture needs a secure context. If this dashboard itself was
+  // opened over plain http:// (the Electron/production server, which has
+  // no TLS on its main port), point at the server's dedicated self-signed
+  // HTTPS listener instead — see config.ts's httpsPort and index.ts.
+  if (window.location.protocol === 'https:') return absoluteUrl(path);
+  const httpsPort = window.location.port ? Number(window.location.port) + 1 : 443;
+  return `https://${window.location.hostname}:${httpsPort}${path}`;
+}
+
+function streamViewLinkFor(match: Pick<Match, 'assignedCourtId'>): string {
+  if (!match.assignedCourtId) return '#';
+  return absoluteUrl(`/stream/live/court/${match.assignedCourtId}`);
 }
 
 /**
@@ -343,6 +364,8 @@ export function AdminDashboard() {
         null,
       umpireLink: umpireLinkFor(created.match),
       umpireCode: created.match.umpireCode,
+      streamBroadcastLink: streamBroadcastLinkFor(created.match),
+      streamViewLink: streamViewLinkFor(created.match),
     });
     setNames({ a1: '', a2: '', b1: '', b2: '' });
     setTeams({ A: { name: '', country: '' }, B: { name: '', country: '' } });
@@ -636,20 +659,83 @@ export function AdminDashboard() {
                       browser, not fetched from a chart API. Rendered on a white
                       plate with dark modules regardless of the dark theme,
                       because that is the contrast polarity scanners expect. */}
-                  <figure className="umpire-qr">
+                  <figure className="qr-code">
                     <QRCodeSVG
                       value={lastCreated.umpireLink}
-                      size={84}
+                      size={64}
                       bgColor="#ffffff"
                       fgColor="#0a0e1a"
-                      marginSize={2}
+                      marginSize={1}
                       title={`QR code for the umpire link to match ${lastCreated.matchId}`}
                     />
-                    <figcaption>Scan to open</figcaption>
+                    <figcaption>Umpire</figcaption>
                   </figure>
                 </div>
                 <button type="button" onClick={() => void handleCopy(lastCreated.umpireLink)}>
-                  Copy
+                  Copy umpire link
+                </button>
+
+                <p className="stream-links-heading">
+                  Video streaming — two separate links, give each to the right person:
+                </p>
+
+                <div className="stream-handoff">
+                  <div className="stream-handoff-details">
+                    <p>Give this to whoever is filming at the court (camera only, no score):</p>
+                    <label>
+                      Broadcast link (court phone)
+                      <input
+                        readOnly
+                        value={lastCreated.streamBroadcastLink}
+                        onFocus={(e) => e.target.select()}
+                      />
+                    </label>
+                  </div>
+                  <figure className="qr-code">
+                    <QRCodeSVG
+                      value={lastCreated.streamBroadcastLink}
+                      size={64}
+                      bgColor="#ffffff"
+                      fgColor="#0a0e1a"
+                      marginSize={1}
+                      title={`QR code for the broadcast link to match ${lastCreated.matchId}`}
+                    />
+                    <figcaption>Broadcast</figcaption>
+                  </figure>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleCopy(lastCreated.streamBroadcastLink)}
+                >
+                  Copy broadcast link
+                </button>
+
+                <div className="stream-handoff">
+                  <div className="stream-handoff-details">
+                    <p>Give this to anyone who wants to watch (video plus live score):</p>
+                    <label>
+                      Viewer link (internet)
+                      <input
+                        readOnly
+                        value={lastCreated.streamViewLink}
+                        onFocus={(e) => e.target.select()}
+                      />
+                    </label>
+                  </div>
+                  <figure className="qr-code">
+                    <QRCodeSVG
+                      value={lastCreated.streamViewLink}
+                      size={64}
+                      bgColor="#ffffff"
+                      fgColor="#0a0e1a"
+                      marginSize={1}
+                      title={`QR code for the viewer link to match ${lastCreated.matchId}`}
+                    />
+                    <figcaption>Viewer</figcaption>
+                  </figure>
+                </div>
+                <button type="button" onClick={() => void handleCopy(lastCreated.streamViewLink)}>
+                  Copy viewer link
                 </button>
               </div>
             )}

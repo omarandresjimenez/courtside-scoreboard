@@ -77,3 +77,36 @@ export interface MatchStatePayload {
   match: Match;
   derived: DerivedMatchState;
 }
+
+/**
+ * WebRTC signaling relay for the court-side broadcast — see
+ * StreamBroadcast/StreamViewer and registerStreamSocketHandlers. The server
+ * never inspects `data`, only relays it, so it's typed loosely here rather
+ * than importing DOM-only types (RTCSessionDescriptionInit,
+ * RTCIceCandidateInit) into this Node-safe shared package.
+ */
+export const STREAM_EVENTS = {
+  VIEWER_JOINED: 'stream:viewer_joined',
+  VIEWER_LEFT: 'stream:viewer_left',
+  BROADCASTER_LEFT: 'stream:broadcaster_left',
+  OFFER: 'stream:offer',
+  ANSWER: 'stream:answer',
+  ICE_CANDIDATE: 'stream:ice_candidate',
+} as const;
+
+/** Sent by a peer: "deliver `data` to the peer identified by `targetId`". */
+export interface StreamSignalOutgoing {
+  targetId: string;
+  data: unknown;
+}
+
+/** Received by a peer: "here's `data` from the peer identified by `fromId`". */
+export interface StreamSignalIncoming {
+  fromId: string;
+  data: unknown;
+}
+
+export interface StreamPeerEventPayload {
+  peerId: string;
+}
+

@@ -11,6 +11,8 @@ import { matchesRouter, setMatchesSocketServer } from './routes/matches.js';
 import { tournamentsRouter } from './routes/tournaments.js';
 import { umpiresRouter } from './routes/umpires.js';
 import { registerSocketHandlers } from './sockets/index.js';
+import { registerStreamSocketHandlers } from './sockets/stream.js';
+import { initializeCloudServices } from './integrations/cloud-sync.js';
 
 export interface CourtsideApp {
   app: Express;
@@ -37,6 +39,9 @@ export interface CreateAppOptions {
  * still resolves correctly. See "Running this for a real match" in the README.
  */
 export function createApp(options: CreateAppOptions = {}): CourtsideApp {
+  // Initialize cloud services (Firebase, Cloudinary) if credentials available
+  initializeCloudServices();
+
   const app = express();
   app.use(cors());
   app.use(express.json());
@@ -68,6 +73,7 @@ export function createApp(options: CreateAppOptions = {}): CourtsideApp {
   const httpServer = createServer(app);
   const io = new SocketIoServer(httpServer, { cors: { origin: '*' } });
   registerSocketHandlers(io);
+  registerStreamSocketHandlers(io);
   setMatchesSocketServer(io);
 
   return { app, httpServer, io };

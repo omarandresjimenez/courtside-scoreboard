@@ -1,5 +1,6 @@
 import legacy from '@vitejs/plugin-legacy';
 import react from '@vitejs/plugin-react';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 import { defineConfig } from 'vite';
 
 // Served by the same Node process as the API in production (Set 02) —
@@ -15,6 +16,11 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   plugins: [
     react(),
+    // Self-signed HTTPS for the dev server — phones on the LAN need a secure
+    // context for getUserMedia (camera capture), which browsers hide entirely
+    // on a plain http:// address that isn't localhost. Visiting the https://
+    // address will show a one-time "not private" warning to click through.
+    basicSsl(),
     legacy({
       // Without an explicit target, the plugin falls back to browserslist's
       // "defaults" query, which already includes browsers that natively

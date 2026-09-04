@@ -1472,19 +1472,287 @@ button.banner:active {
   min-width: 8ch;
 }
 
-.court-list input,
-.created-match-links input {
+.court-list input {
   min-width: 22ch;
-}
-
-.danger-button {
-  border-color: rgba(248, 113, 113, 0.4);
-  color: var(--danger);
 }
 
 .created-match-links {
   border: 1px solid var(--side-a-dim);
   background: rgba(34, 211, 238, 0.06);
+  padding: 1.25rem;
+  border-radius: var(--radius);
+  margin-top: 1.5rem;
+}
+
+.umpire-handoff,
+.stream-handoff {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  margin: 1rem 0;
+}
+
+.umpire-handoff-details,
+.stream-handoff-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.umpire-handoff-details label,
+.stream-handoff-details label {
+  display: block;
+}
+
+.qr-code {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.qr-code svg {
+  border-radius: 0.25rem;
+  background: #ffffff;
+  padding: 0.25rem;
+}
+
+.qr-code figcaption {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.created-match-links button {
+  display: block;
+  margin-top: 0.75rem;
+}
+
+/* Fix input width in match links — don't force 22ch here */
+.created-match-links input {
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .umpire-handoff,
+  .stream-handoff {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .qr-code {
+    width: 100%;
+  }
+
+  .created-match-links {
+    padding: 1rem;
+  }
+}
+
+.stream-links-heading {
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+/* ========== Stream Screen ========== */
+.stream-screen {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.stream-video-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+}
+
+.stream-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.camera-toggle {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  padding: 0.75rem 1rem;
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--text);
+  border: 2px solid var(--border-strong);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.875rem;
+  z-index: 50;
+  transition: all 0.2s;
+}
+
+.camera-toggle:hover {
+  background: rgba(0, 0, 0, 0.9);
+  border-color: var(--accent);
+}
+
+.camera-toggle.active {
+  background: rgba(244, 63, 94, 0.8);
+  border-color: #f43f5e;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.stream-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-dim);
+  font-size: 1.125rem;
+  text-align: center;
+  padding: 2rem;
+}
+
+.stream-score-overlay {
+  position: absolute;
+  bottom: 2rem;
+  right: 2rem;
+  background: rgba(10, 14, 26, 0.95);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 1rem;
+  max-width: 320px;
+  backdrop-filter: blur(10px);
+  z-index: 100;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+}
+
+.stream-score-header {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.stream-scoreboard {
+  display: grid;
+  grid-template-columns: 1fr repeat(var(--set-count, 1), minmax(40px, 1fr));
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.stream-set-labels {
+  display: contents;
+}
+
+.stream-set-labels > span:first-child {
+  /* Empty cell for player name column */
+}
+
+.stream-set-labels > span {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  font-weight: 600;
+  padding: 0.25rem 0;
+}
+
+.stream-set-labels > span.current-set {
+  color: var(--accent);
+  border-bottom: 2px solid var(--accent);
+}
+
+.stream-player-row {
+  display: contents;
+}
+
+.stream-player-row > .stream-player-name {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0.25rem 0;
+  font-size: 0.75rem;
+}
+
+.stream-player-row > strong {
+  text-align: center;
+  font-weight: 700;
+  padding: 0.25rem 0;
+  color: var(--text);
+}
+
+.stream-player-row > strong.set-winner {
+  color: var(--success);
+  background: rgba(52, 211, 153, 0.1);
+  border-radius: 0.25rem;
+}
+
+.stream-score-overlay .side-a > .stream-player-name {
+  color: var(--side-a);
+}
+
+.stream-score-overlay .side-b > .stream-player-name {
+  color: var(--side-b);
+}
+
+.stream-winner {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+  text-align: center;
+  color: var(--success);
+}
+
+/* Responsive overlay sizing */
+@media (max-width: 768px) {
+  .stream-score-overlay {
+    bottom: 1rem;
+    right: 1rem;
+    max-width: 280px;
+    padding: 0.75rem;
+  }
+
+  .stream-scoreboard {
+    gap: 0.375rem;
+    font-size: 0.75rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .stream-score-overlay {
+    bottom: 0.5rem;
+    right: 0.5rem;
+    max-width: 240px;
+    padding: 0.5rem;
+  }
+
+  .stream-scoreboard {
+    grid-template-columns: 1fr repeat(var(--set-count, 1), 32px);
+    gap: 0.25rem;
+    font-size: 0.625rem;
+  }
+}
   border-radius: var(--radius);
   padding: 1rem;
   margin: 1rem 0;
@@ -1748,4 +2016,73 @@ button.banner:active {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* ========== Broadcast Screen (court-side phone) ========== */
+.broadcast-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+  text-align: center;
+}
+
+.broadcast-subtitle {
+  color: var(--text-dim);
+  margin-top: -0.5rem;
+}
+
+.broadcast-preview-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  max-height: 60vh;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.broadcast-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.broadcast-preview-placeholder,
+.broadcast-preview-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.broadcast-preview-overlay {
+  background: rgba(10, 14, 26, 0.6);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 1.25rem;
+}
+
+.broadcast-controls {
+  display: flex;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.broadcast-controls button {
+  flex: 1;
+}
+
+.broadcast-status {
+  color: var(--text-dim);
+  font-size: 0.875rem;
 }
