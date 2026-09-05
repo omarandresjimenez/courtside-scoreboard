@@ -84,6 +84,24 @@ courtsRouter.delete('/courts/:courtId', adminAuth, async (req, res) => {
 // Public, unauthenticated: this is exactly what the code is for — a TV
 // device that doesn't have the admin password types it in at /tv to find
 // its court. Read-only and low-stakes, unlike the umpire code below.
+/**
+ * The court's display name, by id.
+ *
+ * Unauthenticated, unlike `GET /courts`: the broadcaster page is opened from a
+ * QR code with no login, and showing "Court cmtovm7pi0019ig0osnyudvtr" is
+ * useless to the person holding the phone. Only the label is returned — no
+ * tvCode, no current match, nothing the admin listing exposes — and the label
+ * is already public on the TV screen and the internet scoreboard.
+ */
+courtsRouter.get('/courts/:courtId/label', async (req, res) => {
+  const court = await prisma.court.findUnique({ where: { id: req.params.courtId } });
+  if (!court) {
+    res.status(404).json({ error: 'Court not found.' });
+    return;
+  }
+  res.json({ courtId: court.id, label: court.label });
+});
+
 courtsRouter.get('/courts/resolve/:code', async (req, res) => {
   const court = await prisma.court.findUnique({
     where: { tvCode: req.params.code.toUpperCase() },

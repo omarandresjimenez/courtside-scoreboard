@@ -204,6 +204,39 @@
         color: var(--text-dim);
         font-size: 1rem;
         text-align: center;
+        max-width: 90%;
+        line-height: 1.45;
+      }
+      .vidmsg[hidden] {
+        display: none !important;
+      }
+      .reconnect-btn {
+        position: absolute;
+        /* Sits under the message, which is vertically centred. */
+        top: calc(50% + 2.4rem);
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 4;
+        min-height: 44px;
+        padding: 0.45rem 1.1rem;
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        background: rgba(10, 14, 26, 0.75);
+        color: var(--text);
+        font-size: 0.9rem;
+        cursor: pointer;
+      }
+      .reconnect-btn:hover {
+        border-color: var(--side-a);
+      }
+      .reconnect-btn[hidden] {
+        display: none !important;
+      }
+      /* Reserved for genuine faults. "Waiting for the court" keeps the dim
+         neutral colour above, because a court that is not transmitting is a
+         normal state and colouring it red makes viewers report a bug. */
+      .vidmsg.err {
+        color: #fbbf24;
       }
 
       .status {
@@ -451,6 +484,10 @@
 
       <!-- Distinct from .vidmsg, which CSS hides once the stream is playing.
            A pause happens *while* playing, so it needs its own layer. -->
+      <!-- Manual escape hatch. Automatic retry should make it unnecessary,
+           but a stuck viewer must never be told to reload the page. -->
+      <button type="button" class="reconnect-btn" id="reconnectBtn" hidden>↻ Reconnect</button>
+
       <div class="pausedmsg" id="pausedmsg" role="status" hidden>
         <strong>Camera paused</strong>
         <span
@@ -756,6 +793,79 @@
         });
       }
 
+      /**
+       * What the viewer currently knows about the broadcast.
+       *
+       * The message used to be written from two places that could not see each
+       * other: the peer connection's state handler and the stream document
+       * listener. So when a court simply stopped transmitting — an entirely
+       * normal thing between matches — the connection dropped and the viewer
+       * was told "Camera disconnected", which reads as a fault on their end.
+       * Whether something is an error depends on *both* facts, so both now feed
+       * one renderer.
+       */
+      const viewState = {
+        live: false, // the court says it is broadcasting
+        paused: false, // the court paused its camera
+        conn: 'new', // RTCPeerConnection.connectionState
+        playing: false, // we are decoding actual media
+        fatal: null, // unrecoverable, e.g. signalling writes denied
+        exhausted: false, // automatic reconnection gave up
+      };
+
+      function updateViewState(patch) {
+        Object.assign(viewState, patch);
+        renderVideoState();
+      }
+
+      function renderVideoState() {
+        const { live, paused, conn, playing, fatal, exhausted } = viewState;
+        const stage = $('stage');
+
+        // Offered only when waiting will not help: automatic retry has given
+        // up, or signalling itself is broken. Showing it during a normal
+        // "connecting" moment would invite pointless tapping.
+        const btn = $('reconnectBtn');
+        if (btn) btn.hidden = !(exhausted || fatal) || (playing && live);
+
+        // A paused camera still sends black frames, so this sits *over* live
+        // video rather than replacing the message below it.
+        $('pausedmsg').hidden = !(live && paused);
+
+        // Nothing is decodable once the court stops, so don't leave the last
+        // frame frozen on screen looking like a live picture.
+        const showingVideo = playing && live;
+        stage.classList.toggle('playing', showingVideo);
+
+        if (fatal) return setVideoMsg(fatal, true);
+        if (showingVideo) return setVideoMsg(null);
+
+        // The court is not broadcasting. This is the ordinary state between
+        // matches and is deliberately not an error, whatever the peer
+        // connection happens to be doing as it tears down.
+        if (!live) return setVideoMsg('Waiting for the court to start the camera…');
+
+        // From here the court *is* broadcasting, so a missing picture is
+        // genuinely our problem.
+        if (exhausted) {
+          return setVideoMsg(
+            'Lost the connection to the court camera and could not get it back automatically.',
+            true,
+          );
+        }
+        if (conn === 'failed') {
+          return setVideoMsg(
+            'Could not reach the camera. Both devices may be on networks that block direct video.',
+            true,
+          );
+        }
+        if (conn === 'disconnected') {
+          // Not fatal: ICE recovers from this on its own more often than not.
+          return setVideoMsg('Connection interrupted — reconnecting to the court camera…');
+        }
+        return setVideoMsg('Connecting to the court camera…');
+      }
+
       async function watchVideo(db, courtId) {
         const stage = $('stage');
         const video = $('video');
@@ -764,76 +874,13 @@
         keepScreenAwake();
 
         const streamDoc = doc(db, 'streams', courtId);
-        // Random per-tab id: two people watching must not share an entry, or
-        // they would fight over the same offer/answer pair.
-        const viewerId = `v_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
-        const viewerDoc = doc(db, 'streams', courtId, 'viewers', viewerId);
 
-        // STUN + TURN — see ice-config.js. STUN alone cannot traverse the
-        // symmetric NAT that mobile data and many corporate networks use.
-        const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-        const remote = new MediaStream();
-        video.srcObject = remote;
+        // Everything one connection attempt owns, so a retry can drop the
+        // previous attempt cleanly instead of leaving a dead peer and two
+        // orphaned Firestore listeners behind.
+        let attempt = null;
 
-        dbg('info', 'RTCPeerConnection created', {
-          iceServers: ICE_SERVERS.map((sv) => sv.urls),
-        });
-
-        pc.ontrack = (event) => {
-          dbg('ok', 'media track received', {
-            kind: event.track.kind,
-            id: event.track.id.slice(0, 8),
-          });
-          event.streams[0]?.getTracks().forEach((t) => remote.addTrack(t));
-          stage.classList.add('playing');
-          // muted + explicit play(): browsers block autoplay of unmuted media
-          // without a user gesture, and a viewer arriving from a shared link
-          // has made none. This is the same trap the LAN viewer hit.
-          video.play().catch((e) => console.warn('autoplay blocked:', e));
-        };
-
-        pc.onconnectionstatechange = () => {
-          const state = pc.connectionState;
-          dbg(
-            state === 'failed' ? 'err' : state === 'connected' ? 'ok' : 'info',
-            `connectionState -> ${state}`,
-          );
-
-          if (state === 'connected') {
-            setVideoMsg(null);
-            reportSelectedPair(pc);
-            logSelectedCandidatePair(pc);
-          }
-          if (state === 'failed') {
-            stage.classList.remove('playing');
-            // Reaching 'failed' means signalling succeeded and ICE itself
-            // could not find a path — a network problem between the two
-            // devices, not a missing broadcast.
-            dbg(
-              'err',
-              'ICE found no usable path. Signalling worked (an offer arrived and ' +
-                'was answered), so this is NAT traversal, not a missing broadcast. ' +
-                (HAS_TURN
-                  ? 'A TURN relay is configured but did not produce a working path.'
-                  : 'No TURN relay is configured — that is the most likely cause.'),
-            );
-            showDiag();
-            setVideoMsg(
-              'Could not reach the camera. Both devices may be on networks that block direct video.',
-            );
-          }
-          if (state === 'disconnected') {
-            stage.classList.remove('playing');
-            setVideoMsg('Camera disconnected.');
-          }
-        };
-
-        pc.oniceconnectionstatechange = () =>
-          dbg('info', `iceConnectionState -> ${pc.iceConnectionState}`);
-        pc.onicegatheringstatechange = () =>
-          dbg('info', `iceGatheringState -> ${pc.iceGatheringState}`);
-
-        /** Which candidate pair actually won, and whether a relay carried it. */
+        /** Which candidate pair won, and whether a relay carried it. */
         function reportSelectedPair(peer) {
           peer
             .getStats()
@@ -852,147 +899,326 @@
             .catch(() => {});
         }
 
-        const answerCandidates = collection(viewerDoc, 'answerCandidates');
-
-        // Tally by type rather than logging each one: a normal gather is
-        // dozens of candidates, and the only thing that matters is which
-        // *kinds* were obtained. No relay here with symmetric NAT on the
-        // other side means the connection cannot succeed.
-        const gathered = { host: 0, srflx: 0, prflx: 0, relay: 0 };
-        pc.onicecandidate = (e) => {
-          if (!e.candidate) {
-            dbg(
-              gathered.relay > 0 || HAS_TURN === false ? 'info' : 'warn',
-              'local ICE gathering complete',
-              gathered,
-            );
-            if (HAS_TURN && gathered.relay === 0) {
-              dbg(
-                'err',
-                'TURN is configured but produced NO relay candidate — ' +
-                  'the relay is unreachable or its credentials are rejected.',
-              );
+        function teardownAttempt() {
+          if (!attempt) return;
+          const { pc, unsubs, viewerDoc, answerCandidates } = attempt;
+          attempt = null;
+          unsubs.forEach((u) => {
+            try {
+              u();
+            } catch {
+              /* already detached */
             }
-            return;
+          });
+          try {
+            pc.close();
+          } catch {
+            /* already closed */
           }
-          const type = (e.candidate.candidate.match(/ typ (\w+)/) || [])[1];
-          if (type && gathered[type] !== undefined) gathered[type]++;
-          addDoc(answerCandidates, e.candidate.toJSON()).catch((err) =>
-            dbg('err', 'failed writing local ICE candidate', { code: err.code }),
-          );
-        };
-
-        // Fires per STUN/TURN server that misbehaves. 701 = could not reach
-        // the server; a 4xx from a TURN server means it answered and refused.
-        pc.onicecandidateerror = (e) => {
-          dbg('warn', 'ICE server error', {
-            url: e.url,
-            code: e.errorCode,
-            text: e.errorText,
-          });
-        };
-
-        // Announce ourselves; the broadcaster answers by writing an offer here.
-        dbg('info', 'announcing viewer to Firestore', { viewerId });
-        try {
-          await setDoc(viewerDoc, { requestedAt: Date.now() });
-          dbg('ok', 'viewer document written — signalling write permitted');
-        } catch (err) {
-          dbg('err', 'could not write viewer document (signalling blocked)', {
-            code: err.code,
-            message: err.message,
-          });
-          showDiag();
-          setVideoMsg('Could not reach the signalling service.');
-          return;
+          // Free the broadcaster's slot rather than leaving a corpse behind.
+          getDocs(answerCandidates)
+            .then((s) => s.forEach((d) => deleteDoc(d.ref).catch(() => {})))
+            .catch(() => {});
+          deleteDoc(viewerDoc).catch(() => {});
         }
 
-        onSnapshot(
-          viewerDoc,
-          async (snap) => {
-            const offer = snap.data()?.offer;
-            if (!offer) {
-              dbg('info', 'viewer doc updated, still no offer from the broadcaster');
+        // Reconnection. Observed failure this fixes: the broadcaster's tab was
+        // closed rather than stopped, so `live` stayed true in Firestore and
+        // never transitioned — the peer simply went disconnected -> failed and
+        // the page then sat dead for as long as the viewer was willing to wait.
+        // Reloading fixed it, which is precisely the symptom that was reported.
+        let retryTimer = null;
+        let retryCount = 0;
+        const MAX_RETRIES = 6;
+
+        function scheduleRetry(reason) {
+          if (retryTimer) return; // one in flight is enough
+          // Nothing to retry against if the court is not broadcasting; the
+          // live -> true handler below will start us when it comes back.
+          if (!viewState.live) return;
+          if (retryCount >= MAX_RETRIES) {
+            dbg('warn', 'giving up automatic reconnection', { attempts: retryCount });
+            updateViewState({ exhausted: true });
+            return;
+          }
+          // Backoff, capped: a court that is genuinely gone should not be
+          // hammered, but a transient drop should recover in seconds.
+          const delay = Math.min(2000 * 2 ** retryCount, 15000);
+          retryCount += 1;
+          dbg('info', `reconnecting in ${Math.round(delay / 1000)}s`, {
+            attempt: retryCount,
+            reason,
+          });
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            void connectAttempt(`retry ${retryCount}: ${reason}`);
+          }, delay);
+        }
+
+        function cancelRetry() {
+          if (retryTimer) clearTimeout(retryTimer);
+          retryTimer = null;
+        }
+
+        async function connectAttempt(reason) {
+          teardownAttempt();
+          updateViewState({ conn: 'new', playing: false, fatal: null });
+
+          // A fresh id per attempt: the broadcaster ignores a viewer it already
+          // holds a peer for, so reusing the id after a failure would be
+          // silently dropped.
+          const viewerId = `v_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
+          const viewerDoc = doc(db, 'streams', courtId, 'viewers', viewerId);
+          const answerCandidates = collection(viewerDoc, 'answerCandidates');
+
+          // STUN + TURN — see ice-config.js. STUN alone cannot traverse the
+          // symmetric NAT that mobile data and many corporate networks use.
+          const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+          const remote = new MediaStream();
+          video.srcObject = remote;
+
+          const unsubs = [];
+          attempt = { pc, unsubs, viewerDoc, answerCandidates };
+
+          dbg('info', `connection attempt (${reason})`, {
+            viewerId,
+            iceServers: ICE_SERVERS.map((sv) => sv.urls),
+          });
+
+          pc.ontrack = (event) => {
+            dbg('ok', 'media track received', {
+              kind: event.track.kind,
+              id: event.track.id.slice(0, 8),
+            });
+            event.streams[0]?.getTracks().forEach((t) => remote.addTrack(t));
+            updateViewState({ playing: true });
+            // muted + explicit play(): browsers block autoplay of unmuted media
+            // without a user gesture, and a viewer arriving from a shared link
+            // has made none. This is the same trap the LAN viewer hit.
+            video.play().catch((e) => console.warn('autoplay blocked:', e));
+          };
+
+          pc.onconnectionstatechange = () => {
+            const state = pc.connectionState;
+            dbg(
+              state === 'failed' ? 'err' : state === 'connected' ? 'ok' : 'info',
+              `connectionState -> ${state}`,
+            );
+
+            if (state === 'connected') {
+              retryCount = 0;
+              cancelRetry();
+              updateViewState({ exhausted: false });
+              reportSelectedPair(pc);
+              logSelectedCandidatePair(pc);
+            }
+            if (state === 'failed') {
+              // Only worth diagnosing loudly while the court says it is
+              // broadcasting. If it has stopped, the peer failing is just the
+              // teardown and there is nothing wrong to investigate.
+              if (viewState.live) {
+                dbg(
+                  'err',
+                  'ICE found no usable path. Signalling worked (an offer arrived and ' +
+                    'was answered), so this is NAT traversal, not a missing broadcast. ' +
+                    (HAS_TURN
+                      ? 'A TURN relay is configured but did not produce a working path.'
+                      : 'No TURN relay is configured — that is the most likely cause.'),
+                );
+                showDiag();
+              } else {
+                dbg('info', 'peer closed after the court stopped broadcasting (expected)');
+              }
+              // Only retries while the court still claims to be live, so a
+              // stopped broadcast quietly does nothing instead of looping.
+              scheduleRetry('connection failed');
+            }
+            updateViewState({
+              conn: state,
+              playing: state === 'failed' || state === 'closed' ? false : viewState.playing,
+            });
+          };
+
+          pc.oniceconnectionstatechange = () =>
+            dbg('info', `iceConnectionState -> ${pc.iceConnectionState}`);
+          pc.onicegatheringstatechange = () =>
+            dbg('info', `iceGatheringState -> ${pc.iceGatheringState}`);
+
+          // Tally by type rather than logging each one: a normal gather is
+          // dozens of candidates, and the only thing that matters is which
+          // *kinds* were obtained.
+          const gathered = { host: 0, srflx: 0, prflx: 0, relay: 0 };
+          pc.onicecandidate = (e) => {
+            if (!e.candidate) {
+              dbg(
+                gathered.relay > 0 || HAS_TURN === false ? 'info' : 'warn',
+                'local ICE gathering complete',
+                gathered,
+              );
+              if (HAS_TURN && gathered.relay === 0) {
+                dbg(
+                  'err',
+                  'TURN is configured but produced NO relay candidate — ' +
+                    'the relay is unreachable or its credentials are rejected.',
+                );
+              }
               return;
             }
-            if (pc.currentRemoteDescription) return;
-            dbg('ok', 'offer received from broadcaster', { sdpBytes: offer.sdp?.length });
-            try {
-              await pc.setRemoteDescription(new RTCSessionDescription(offer));
-              const answer = await pc.createAnswer();
-              await pc.setLocalDescription(answer);
-              await setDoc(
-                viewerDoc,
-                { answer: { type: answer.type, sdp: answer.sdp } },
-                { merge: true },
-              );
-              dbg('ok', 'answer sent — handshake complete, ICE now negotiating');
-            } catch (err) {
-              dbg('err', 'failed answering the offer', { message: err.message });
-              showDiag();
-            }
-          },
-          (err) => dbg('err', 'viewer doc snapshot failed', { code: err.code }),
-        );
+            const type = (e.candidate.candidate.match(/ typ (\w+)/) || [])[1];
+            if (type && gathered[type] !== undefined) gathered[type]++;
+            addDoc(answerCandidates, e.candidate.toJSON()).catch((err) =>
+              dbg('err', 'failed writing local ICE candidate', { code: err.code }),
+            );
+          };
 
-        let remoteCandidates = 0;
-        onSnapshot(
-          collection(viewerDoc, 'offerCandidates'),
-          (snap) => {
-            snap.docChanges().forEach((c) => {
-              if (c.type !== 'added') return;
-              remoteCandidates++;
-              pc.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(() => {});
+          // Fires per STUN/TURN server that misbehaves. 701 = could not reach
+          // the server; a 4xx from a TURN server means it answered and refused.
+          pc.onicecandidateerror = (e) => {
+            dbg('warn', 'ICE server error', { url: e.url, code: e.errorCode, text: e.errorText });
+          };
+
+          // Announce ourselves; the broadcaster answers by writing an offer here.
+          try {
+            await setDoc(viewerDoc, { requestedAt: Date.now() });
+            dbg('ok', 'viewer document written — signalling write permitted');
+          } catch (err) {
+            dbg('err', 'could not write viewer document (signalling blocked)', {
+              code: err.code,
+              message: err.message,
             });
-            if (remoteCandidates) {
-              dbg('info', 'broadcaster ICE candidates received', { total: remoteCandidates });
-            }
-          },
-          (err) => dbg('err', 'offerCandidates snapshot failed', { code: err.code }),
-        );
+            showDiag();
+            updateViewState({
+              fatal: 'Could not reach the signalling service. Check your internet connection.',
+            });
+            return;
+          }
+
+          // The attempt can be torn down while that write is in flight.
+          if (!attempt || attempt.pc !== pc) return;
+
+          unsubs.push(
+            onSnapshot(
+              viewerDoc,
+              async (snap) => {
+                // The broadcaster deletes a viewer document when it drops the
+                // peer (timeout, failure, or its own restart). That is an
+                // explicit "you are no longer connected" — re-announce instead
+                // of waiting for an offer that will never come.
+                if (!snap.exists() && !viewState.playing) {
+                  dbg('info', 'broadcaster dropped our viewer document');
+                  scheduleRetry('dropped by broadcaster');
+                  return;
+                }
+                const offer = snap.data()?.offer;
+                if (!offer) return;
+                if (pc.currentRemoteDescription) return;
+                dbg('ok', 'offer received from broadcaster', { sdpBytes: offer.sdp?.length });
+                try {
+                  await pc.setRemoteDescription(new RTCSessionDescription(offer));
+                  const answer = await pc.createAnswer();
+                  await pc.setLocalDescription(answer);
+                  await setDoc(
+                    viewerDoc,
+                    { answer: { type: answer.type, sdp: answer.sdp } },
+                    { merge: true },
+                  );
+                  dbg('ok', 'answer sent — handshake complete, ICE now negotiating');
+                } catch (err) {
+                  dbg('err', 'failed answering the offer', { message: err.message });
+                  showDiag();
+                }
+              },
+              (err) => dbg('err', 'viewer doc snapshot failed', { code: err.code }),
+            ),
+          );
+
+          let remoteCandidates = 0;
+          unsubs.push(
+            onSnapshot(
+              collection(viewerDoc, 'offerCandidates'),
+              (snap) => {
+                snap.docChanges().forEach((c) => {
+                  if (c.type !== 'added') return;
+                  remoteCandidates++;
+                  pc.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(() => {});
+                });
+                if (remoteCandidates) {
+                  dbg('info', 'broadcaster ICE candidates received', { total: remoteCandidates });
+                }
+              },
+              (err) => dbg('err', 'offerCandidates snapshot failed', { code: err.code }),
+            ),
+          );
+        }
+
+        // Manual escape hatch. Nothing should need it now, but a viewer who is
+        // stuck should never be told to reload the page.
+        $('reconnectBtn')?.addEventListener('click', () => {
+          dbg('info', 'viewer pressed Reconnect');
+          cancelRetry();
+          retryCount = 0;
+          updateViewState({ exhausted: false });
+          void connectAttempt('manual');
+        });
 
         // Tell the viewer whether anyone is even broadcasting, so "no video"
         // reads as a fact about the court rather than a broken page.
+        let wasLive = false;
         onSnapshot(streamDoc, (snap) => {
           const data = snap.exists() ? snap.data() : null;
           const live = !!data?.live;
 
-          // Only meaningful while the court is actually broadcasting; a stale
-          // paused flag on a dead stream would be misleading.
-          $('pausedmsg').hidden = !(live && data?.paused);
           dbg('info', 'stream document', {
             exists: snap.exists(),
             live,
             paused: !!data?.paused,
           });
+          updateViewState({ live, paused: !!data?.paused });
 
-          if (!live) {
-            if (!stage.classList.contains('playing')) {
-              setVideoMsg('Waiting for the court to start the camera…');
-            }
-          } else if (!stage.classList.contains('playing')) {
-            setVideoMsg('Connecting to the court camera…');
+          // The court just started (or restarted) transmitting. Re-announce
+          // rather than waiting: a viewer who was already on the page before
+          // Start was pressed has, by now, either had its request expire or
+          // been swept up by the broadcaster's start-up purge — which is why
+          // this used to need a manual page reload.
+          if (live && !wasLive && !viewState.playing) {
+            cancelRetry();
+            retryCount = 0;
+            updateViewState({ exhausted: false });
+            void connectAttempt('court went live');
           }
+          wasLive = live;
         });
+
+        await connectAttempt('initial');
 
         // Best-effort cleanup so the broadcaster stops holding a peer for a tab
         // that has gone away. Not guaranteed to run — hence the broadcaster
         // also drops peers whose connection fails.
         addEventListener('pagehide', () => {
           try {
-            pc.close();
-            getDocs(answerCandidates).then((s) => s.forEach((d) => deleteDoc(d.ref)));
-            deleteDoc(viewerDoc);
+            cancelRetry();
+            teardownAttempt();
           } catch {
             /* the page is going away regardless */
           }
         });
       }
 
-      function setVideoMsg(text) {
+      /**
+       * @param {string|null} text  null clears the message entirely.
+       * @param {boolean} isError   only true for genuine faults — a court that
+       *   simply is not broadcasting is a normal state, not an error, and
+       *   must not be coloured like one.
+       */
+      function setVideoMsg(text, isError = false) {
         const el = $('vidmsg');
-        if (text === null) return;
+        if (text === null) {
+          el.hidden = true;
+          return;
+        }
+        el.hidden = false;
         el.textContent = text;
+        el.classList.toggle('err', isError);
       }
 
       const firstName = (n) => (n || '').split(/\s+/)[0] || n || '';

@@ -9,6 +9,11 @@ jest.mock('../lib/useCameraBroadcast.js', () => ({
   useCameraBroadcast: (...args: unknown[]) => mockUseCameraBroadcast(...args),
 }));
 
+const mockUseCourtLabel = jest.fn();
+jest.mock('../lib/useCourtLabel.js', () => ({
+  useCourtLabel: (...args: unknown[]) => mockUseCourtLabel(...args),
+}));
+
 jest.mock('../lib/StreamVideo.js', () => ({
   StreamVideo: ({ stream }: { stream: MediaStream | null }) => (
     <div data-testid="stream-video">{stream ? 'attached' : 'empty'}</div>
@@ -41,6 +46,7 @@ function renderAt(courtId = 'court1') {
 beforeEach(() => {
   jest.clearAllMocks();
   mockUseCameraBroadcast.mockReturnValue(broadcast());
+  mockUseCourtLabel.mockReturnValue(null);
 });
 
 describe('StreamBroadcast', () => {
@@ -136,5 +142,21 @@ describe('StreamBroadcast', () => {
   it('broadcasts for the court in the URL', () => {
     renderAt('court-42');
     expect(mockUseCameraBroadcast).toHaveBeenCalledWith('court-42');
+  });
+
+  it('names the court, not its id', () => {
+    mockUseCourtLabel.mockReturnValue('Center Court');
+    renderAt('cmtovm7pi0019ig0osnyudvtr');
+
+    expect(screen.getByText('Center Court')).toBeInTheDocument();
+    // A raw cuid tells the person holding the phone nothing.
+    expect(screen.queryByText(/cmtovm7pi/)).not.toBeInTheDocument();
+  });
+
+  it('falls back to the id until the name is known', () => {
+    mockUseCourtLabel.mockReturnValue(null);
+    renderAt('court-42');
+
+    expect(screen.getByText('Court court-42')).toBeInTheDocument();
   });
 });

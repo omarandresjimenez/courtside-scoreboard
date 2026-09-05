@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { useCameraBroadcast } from '../lib/useCameraBroadcast.js';
+import { useCourtLabel } from '../lib/useCourtLabel.js';
 import { StreamVideo } from '../lib/StreamVideo.js';
 import { useFullscreen } from '../lib/useFullscreen.js';
 import { useWakeLock } from '../lib/useWakeLock.js';
@@ -24,6 +25,9 @@ export function StreamBroadcast() {
   const { courtId } = useParams<{ courtId: string }>();
   const { status, errorMessage, internetViewers, stream, start, togglePause, stop } =
     useCameraBroadcast(courtId);
+  // Falls back to the id until the name arrives (or if it never does) — the
+  // person holding the phone needs to know which court this is.
+  const courtLabel = useCourtLabel(courtId);
   const screenRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   // The whole panel, not just the preview: the operator still needs Pause and
@@ -40,7 +44,7 @@ export function StreamBroadcast() {
   return (
     <main className="broadcast-screen" ref={screenRef}>
       <h1>Court transmission</h1>
-      <p className="broadcast-subtitle">Court {courtId}</p>
+      <p className="broadcast-subtitle">{courtLabel ?? `Court ${courtId}`}</p>
 
       <div className="broadcast-preview-container">
         <StreamVideo stream={stream} className="broadcast-preview" ref={videoRef} />

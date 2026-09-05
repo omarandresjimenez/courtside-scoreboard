@@ -22,7 +22,10 @@ const mockOnSnapshot = jest.fn((ref: unknown, callback: (snap: unknown) => void)
   return unsubscribe;
 });
 
-const mockDeleteDoc = jest.fn(async () => undefined);
+const mockDeleteDoc = jest.fn(async (_ref?: unknown) => undefined);
+/** Existing viewer docs the broadcaster finds at start-up. */
+let existingViewerDocs: Array<{ id: string; data: () => unknown; ref: unknown }> = [];
+const mockGetDocs = jest.fn(async () => ({ docs: existingViewerDocs }));
 const mockAddDoc = jest.fn(async () => undefined);
 const mockSetDoc = jest.fn(async () => undefined);
 
@@ -43,7 +46,7 @@ jest.mock('firebase/firestore', () => ({
   setDoc: (...args: unknown[]) => mockSetDoc(...(args as [])),
   addDoc: (...args: unknown[]) => mockAddDoc(...(args as [])),
   deleteDoc: (...args: unknown[]) => mockDeleteDoc(...(args as [])),
-  getDocs: jest.fn(async () => ({ docs: [] })),
+  getDocs: () => mockGetDocs(),
   serverTimestamp: jest.fn(() => 'ts'),
 }));
 
@@ -97,6 +100,8 @@ beforeEach(() => {
   mockDeleteDoc.mockClear();
   mockAddDoc.mockClear();
   mockSetDoc.mockClear();
+  mockGetDocs.mockClear();
+  existingViewerDocs = [];
   (globalThis as Record<string, unknown>).RTCPeerConnection = function () {
     const pc = new FakePeerConnection();
     createdPeers.push(pc);
@@ -459,6 +464,64 @@ describe('broadcastToInternet paused flag', () => {
 
     expect(() => handle.setPaused(true)).not.toThrow();
 
+    handle.stop();
+  });
+});
+
+describe('broadcastToInternet start-up purge', () => {
+  const viewerDoc = (id: string, requestedAt?: number) => ({
+    id,
+    data: () => (requestedAt === undefined ? {} : { requestedAt }),
+    ref: { path: `streams/court1/viewers/${id}` },
+  });
+
+  it('deletes viewer documents left over from a previous session', async () => {
+    existingViewerDocs = [viewerDoc('ancient', Date.now() - 3 * 60 * 60 * 1000)];
+
+    const handle = broadcastToInternet(config, 'court1', fakeStream());
+    await flush();
+
+    expect(mockDeleteDoc).toHaveBeenCalled();
+    handle.stop();
+  });
+
+  it('deletes documents with no timestamp, which predate the field', async () => {
+    existingViewerDocs = [viewerDoc('untimestamped')];
+
+    const handle = broadcastToInternet(config, 'court1', fakeStream());
+    await flush();
+
+    expect(mockDeleteDoc).toHaveBeenCalled();
+    handle.stop();
+  });
+
+  it('keeps a viewer that is still waiting, instead of sweeping it away', async () => {
+    // Someone opened the viewer link seconds before the court pressed Start.
+    // Deleting their request meant the listener never saw it as `added`, so
+    // they waited forever on a live broadcast — and reloading "fixed" it.
+    existingViewerDocs = [viewerDoc('waiting', Date.now() - 5_000)];
+
+    const handle = broadcastToInternet(config, 'court1', fakeStream());
+    await flush();
+
+    expect(mockDeleteDoc).not.toHaveBeenCalled();
+    handle.stop();
+  });
+
+  it('purges only the stale ones when both are present', async () => {
+    existingViewerDocs = [
+      viewerDoc('stale', Date.now() - 10 * 60 * 1000),
+      viewerDoc('waiting', Date.now() - 2_000),
+    ];
+
+    const handle = broadcastToInternet(config, 'court1', fakeStream());
+    await flush();
+
+    const deletedPaths = mockDeleteDoc.mock.calls.map(
+      (c) => (c[0] as { path?: string } | undefined)?.path,
+    );
+    expect(deletedPaths.some((p) => p?.includes('stale'))).toBe(true);
+    expect(deletedPaths.some((p) => p?.includes('waiting'))).toBe(false);
     handle.stop();
   });
 });

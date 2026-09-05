@@ -127,6 +127,32 @@ describe('GET /api/courts/resolve/:code', () => {
   });
 });
 
+describe('GET /api/courts/:courtId/label', () => {
+  it('returns 404 for an unknown court', async () => {
+    const response = await request(buildApp()).get('/api/courts/nope/label');
+    expect(response.status).toBe(404);
+  });
+
+  it('returns the label without auth, since the broadcaster page has none', async () => {
+    const court = mockPrisma.seedCourt({ label: 'Center Court' });
+
+    const response = await request(buildApp()).get(`/api/courts/${court.id}/label`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ courtId: court.id, label: 'Center Court' });
+  });
+
+  it('exposes only the label, not what the admin listing returns', async () => {
+    const court = mockPrisma.seedCourt({ label: 'Court 1', tvCode: 'SECRET' });
+
+    const response = await request(buildApp()).get(`/api/courts/${court.id}/label`);
+
+    // This endpoint is unauthenticated, so its payload must stay minimal.
+    expect(Object.keys(response.body).sort()).toEqual(['courtId', 'label']);
+    expect(JSON.stringify(response.body)).not.toContain('SECRET');
+  });
+});
+
 describe('DELETE /api/courts/:courtId', () => {
   it('returns 404 for an unknown court', async () => {
     const response = await request(buildApp())

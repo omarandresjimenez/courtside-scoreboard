@@ -239,12 +239,32 @@ export function broadcastToInternet(
     );
   }
 
-  // Anything already in this collection predates the broadcast that is only
-  // just starting, so by definition it is a leftover from a previous session.
-  // Clearing it up-front means a new broadcast never begins with its viewer
-  // slots already spent on peers that no longer exist.
+  // Clear leftovers from previous sessions so a new broadcast never begins
+  // with its viewer slots already spent on peers that no longer exist.
+  //
+  // Only the *stale* ones. An earlier version deleted every document here on
+  // the theory that anything predating the broadcast must be abandoned — which
+  // silently broke the ordinary case of someone opening the viewer link before
+  // the court presses Start. Their document was deleted, so the listener below
+  // never saw it as `added`, and they waited forever on a broadcast that was
+  // live. Reloading the page fixed it, which is exactly how it was reported.
+  //
+  // A recent request is a viewer genuinely waiting: leaving it in place means
+  // the initial snapshot reports it as `added` and it gets an offer straight
+  // away.
   const purged = getDocs(viewersCol)
-    .then((snap) => Promise.all(snap.docs.map((d) => deleteDoc(d.ref).catch(() => {}))))
+    .then((snap) =>
+      Promise.all(
+        snap.docs
+          .filter((d) => {
+            const requestedAt = (d.data() as { requestedAt?: number } | undefined)?.requestedAt;
+            // No timestamp at all means it predates this field, so it is old.
+            if (typeof requestedAt !== 'number') return true;
+            return Date.now() - requestedAt > VIEWER_REQUEST_TTL_MS;
+          })
+          .map((d) => deleteDoc(d.ref).catch(() => {})),
+      ),
+    )
     .catch(() => {});
 
   // Viewers announce themselves by creating their own document.
