@@ -1,6 +1,7 @@
 import type { Server, Socket } from 'socket.io';
 import {
   STREAM_EVENTS,
+  type StreamPausedPayload,
   type StreamPeerEventPayload,
   type StreamSignalOutgoing,
 } from '@courtside/shared';
@@ -15,6 +16,11 @@ function roomForStream(courtId: string): string {
  * and packages/client/src/lib/webrtc-stream.ts. */
 const broadcasterByCourtId = new Map<string, string>();
 
+/** courtId -> whether its broadcaster is currently paused. Held server-side
+ * rather than only forwarded live, so a viewer who opens the page *during* a
+ * pause is told about it too instead of staring at black video. */
+const pausedByCourtId = new Map<string, boolean>();
+
 /** Registered alongside registerSocketHandlers — Socket.io supports multiple
  * 'connection' listeners, so this stays independent of the scoring wiring. */
 export function registerStreamSocketHandlers(io: Server): void {
@@ -28,6 +34,14 @@ export function registerStreamSocketHandlers(io: Server): void {
 
     if (role === 'stream-broadcaster') {
       broadcasterByCourtId.set(courtId, socket.id);
+      // A fresh broadcaster always starts live; clear any stale paused flag
+      // left behind by a previous one on this court.
+      pausedByCourtId.delete(courtId);
+
+      socket.on(STREAM_EVENTS.PAUSED, (payload: StreamPausedPayload) => {
+        pausedByCourtId.set(courtId, payload.paused);
+        socket.to(room).emit(STREAM_EVENTS.PAUSED, payload);
+      });
 
       // Viewers who joined before this broadcaster did are already sitting
       // in the room — each still needs an offer, not just future joiners.
@@ -41,7 +55,10 @@ export function registerStreamSocketHandlers(io: Server): void {
       }
 
       socket.on('disconnect', () => {
-        if (broadcasterByCourtId.get(courtId) === socket.id) broadcasterByCourtId.delete(courtId);
+        if (broadcasterByCourtId.get(courtId) === socket.id) {
+          broadcasterByCourtId.delete(courtId);
+          pausedByCourtId.delete(courtId);
+        }
         socket.to(room).emit(STREAM_EVENTS.BROADCASTER_LEFT);
       });
     } else {
@@ -49,6 +66,10 @@ export function registerStreamSocketHandlers(io: Server): void {
       if (broadcasterId) {
         const payload: StreamPeerEventPayload = { peerId: socket.id };
         io.to(broadcasterId).emit(STREAM_EVENTS.VIEWER_JOINED, payload);
+        if (pausedByCourtId.get(courtId)) {
+          const paused: StreamPausedPayload = { paused: true };
+          socket.emit(STREAM_EVENTS.PAUSED, paused);
+        }
       }
 
       socket.on('disconnect', () => {

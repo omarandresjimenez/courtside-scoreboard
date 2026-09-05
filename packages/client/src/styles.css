@@ -1423,6 +1423,33 @@ button.banner:active {
   gap: 0.6rem;
 }
 
+/* Row 3: the public internet link. Tinted and labelled so it reads as a
+   different *kind* of address from the LAN links above it — this is the only
+   one that works outside the venue, and the only one safe to hand to someone
+   who isn't on the network. */
+.public-link-row {
+  margin-top: 0.4rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px dashed rgba(52, 211, 153, 0.35);
+  border-radius: var(--radius-sm);
+  background: rgba(52, 211, 153, 0.05);
+}
+
+.public-link-label {
+  flex-shrink: 0;
+  color: var(--success);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.public-link-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .court-row-actions input {
   flex: 1 1 auto;
   min-width: 0;
@@ -1631,6 +1658,36 @@ button.banner:active {
   padding: 2rem;
 }
 
+/* Labels the still-running video: a paused broadcast keeps sending (black)
+   frames rather than tearing the connection down, so without this the viewer
+   just sees a dark court and assumes the stream broke.
+   Deliberately a centred badge and NOT a full-bleed scrim — a scrim over
+   live video is indistinguishable from "the video is gone", which is exactly
+   how it got misread the first time. The layer only centres the badge; it
+   paints nothing itself and swallows no clicks. */
+.stream-paused-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 90;
+}
+
+.stream-paused-overlay p {
+  margin: 0;
+  padding: 0.6rem 1.4rem;
+  border-radius: 999px;
+  background: rgba(10, 14, 26, 0.82);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  color: var(--warning);
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .stream-score-overlay {
   position: absolute;
   bottom: 2rem;
@@ -1640,6 +1697,25 @@ button.banner:active {
   border-radius: var(--radius);
   padding: 1rem;
   max-width: 320px;
+  backdrop-filter: blur(10px);
+  z-index: 100;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+}
+
+/* Stands in for .stream-score-overlay while the match state is still
+   loading (or absent) — same corner, same weight, so the video doesn't
+   reflow once the real scoreboard replaces it. */
+.stream-score-pending {
+  position: absolute;
+  bottom: 2rem;
+  right: 2rem;
+  margin: 0;
+  background: rgba(10, 14, 26, 0.95);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 1rem;
+  max-width: 320px;
+  color: var(--text-dim);
   backdrop-filter: blur(10px);
   z-index: 100;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
@@ -1753,6 +1829,10 @@ button.banner:active {
     font-size: 0.625rem;
   }
 }
+
+.created-match-links {
+  border: 1px solid var(--side-a-dim);
+  background: rgba(34, 211, 238, 0.06);
   border-radius: var(--radius);
   padding: 1rem;
   margin: 1rem 0;

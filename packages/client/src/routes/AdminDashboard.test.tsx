@@ -493,7 +493,7 @@ describe('AdminDashboard', () => {
       render(<AdminDashboard />);
       await screen.findByText('Court 1', { selector: 'span' });
 
-      await userEvent.click(screen.getByRole('button', { name: 'Copy' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Copy TV link for Court 1' }));
 
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith('http://localhost/tv/court/c1');
       expect(await screen.findByText('Link copied.')).toBeInTheDocument();
@@ -560,7 +560,7 @@ describe('AdminDashboard', () => {
       render(<AdminDashboard />);
       await screen.findByText('Court 1', { selector: 'span' });
 
-      await userEvent.click(screen.getByRole('button', { name: 'Copy' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Copy TV link for Court 1' }));
 
       expect(
         await screen.findByText("Couldn't copy — select the link above and copy manually."),

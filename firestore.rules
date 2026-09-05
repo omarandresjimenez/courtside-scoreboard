@@ -1,0 +1,52 @@
+rules_version = '2';
+
+// Courtside Scoreboard — public scoreboard data.
+//
+// The whole point of these documents is that anyone with the public viewer
+// link can read the live score without authenticating, so read is open.
+//
+// Writes are closed to *everyone*. The only writer is the desktop app's
+// server, which uses a Firebase Admin service account — the Admin SDK
+// bypasses these rules entirely, so denying all client writes here costs the
+// app nothing and stops a reader from editing the score of a live match.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // One document per court, written by the server on every score change.
+    // See syncScoreToCloud() / toPublicScoreboard() — the payload is an
+    // allow-listed projection that must never include the umpire token.
+    match /matches/{courtId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // WebRTC signalling for internet viewers.
+    //
+    // Unlike the score above, signalling is inherently two-way: a viewer must
+    // WRITE its SDP answer and ICE candidates somewhere the broadcaster can
+    // read them. With no user accounts in this app, that write cannot be
+    // restricted to a known identity, so this subtree is open.
+    //
+    // Why that is an acceptable POC trade-off:
+    //   * It carries no personal data — only SDP blobs and ICE candidates,
+    //     which are useless without a live peer on the other end.
+    //   * {courtId} is a cuid, so the path is not guessable by drive-by.
+    //   * The score itself stays read-only: nothing here lets anyone alter a
+    //     match. The worst case is a stranger negotiating a video connection,
+    //     which the broadcaster caps (see MAX_INTERNET_VIEWERS) so it cannot
+    //     exhaust the phone's uplink.
+    // If this ever needs hardening, Firebase Anonymous Auth plus a
+    // `request.auth.uid == viewerId` check is the natural next step.
+    match /streams/{courtId} {
+      allow read, write: if true;
+      match /{document=**} {
+        allow read, write: if true;
+      }
+    }
+
+    // Nothing else is public.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,6 +1,7 @@
 import { io, type Socket } from 'socket.io-client';
 import {
   STREAM_EVENTS,
+  type StreamPausedPayload,
   type StreamPeerEventPayload,
   type StreamSignalIncoming,
   type StreamSignalOutgoing,
@@ -52,9 +53,12 @@ export function startBroadcasting(courtId: string, stream: MediaStream): Broadca
   });
 
   socket.on(STREAM_EVENTS.ICE_CANDIDATE, ({ fromId, data }: StreamSignalIncoming) => {
-    void peers.get(fromId)?.addIceCandidate(data as RTCIceCandidateInit).catch(() => {
-      // A candidate can lose the race against the connection closing — safe to ignore.
-    });
+    void peers
+      .get(fromId)
+      ?.addIceCandidate(data as RTCIceCandidateInit)
+      .catch(() => {
+        // A candidate can lose the race against the connection closing — safe to ignore.
+      });
   });
 
   socket.on(STREAM_EVENTS.VIEWER_LEFT, ({ peerId }: StreamPeerEventPayload) => {
@@ -67,6 +71,10 @@ export function startBroadcasting(courtId: string, stream: MediaStream): Broadca
       stream.getVideoTracks().forEach((track) => {
         track.enabled = enabled;
       });
+      // Disabling the track keeps the connection up and just sends black
+      // frames, so viewers have to be told explicitly (see STREAM_EVENTS.PAUSED).
+      const payload: StreamPausedPayload = { paused: !enabled };
+      socket.emit(STREAM_EVENTS.PAUSED, payload);
     },
     stop() {
       peers.forEach((pc) => pc.close());
@@ -85,6 +93,7 @@ export interface ViewerHandle {
 export function startViewing(
   courtId: string,
   onStream: (stream: MediaStream | null) => void,
+  onPaused?: (paused: boolean) => void,
 ): ViewerHandle {
   const socket: Socket = io('/', {
     query: { role: 'stream-viewer', courtId },
@@ -101,7 +110,10 @@ export function startViewing(
     connection.ontrack = (event) => onStream(event.streams[0] ?? null);
     connection.onicecandidate = (event) => {
       if (!event.candidate || !broadcasterId) return;
-      const payload: StreamSignalOutgoing = { targetId: broadcasterId, data: event.candidate.toJSON() };
+      const payload: StreamSignalOutgoing = {
+        targetId: broadcasterId,
+        data: event.candidate.toJSON(),
+      };
       socket.emit(STREAM_EVENTS.ICE_CANDIDATE, payload);
     };
     pc = connection;
@@ -119,10 +131,15 @@ export function startViewing(
     });
   });
 
+  socket.on(STREAM_EVENTS.PAUSED, ({ paused }: StreamPausedPayload) => {
+    onPaused?.(paused);
+  });
+
   socket.on(STREAM_EVENTS.BROADCASTER_LEFT, () => {
     pc?.close();
     pc = null;
     onStream(null);
+    onPaused?.(false);
   });
 
   return {

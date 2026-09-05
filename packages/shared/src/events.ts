@@ -92,6 +92,11 @@ export const STREAM_EVENTS = {
   OFFER: 'stream:offer',
   ANSWER: 'stream:answer',
   ICE_CANDIDATE: 'stream:ice_candidate',
+  /** Pausing only flips `track.enabled` on the broadcaster, which keeps the
+   * peer connection up and simply sends black frames — indistinguishable to
+   * a viewer from a dark court. The paused state therefore has to travel as
+   * its own signal, or the viewer shows black video with no explanation. */
+  PAUSED: 'stream:paused',
 } as const;
 
 /** Sent by a peer: "deliver `data` to the peer identified by `targetId`". */
@@ -110,3 +115,6 @@ export interface StreamPeerEventPayload {
   peerId: string;
 }
 
+export interface StreamPausedPayload {
+  paused: boolean;
+}

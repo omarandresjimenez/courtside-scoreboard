@@ -9,12 +9,24 @@ launcher, and reworked how the installers are built (see "Later session"
 below). Read this before README.md — README is the polished setup doc;
 this is the "how it actually works and why" doc.
 
+> **Companion document:** [STREAMING_UPGRADE.md](STREAMING_UPGRADE.md) covers
+> everything about **video streaming and internet delivery** — WebRTC, the
+> public Firebase-hosted scoreboard, cloud score sync, their configuration, and
+> their gaps. That work is deliberately kept out of this file to stop it growing
+> unbounded; this document remains the authority on the core LAN app.
+
 ## What this is
 
 A LAN-based, real-time badminton match scoring system. An admin creates
 matches from a dashboard; an umpire scores live from a phone; TV screens at
 each court show the live score. Everything runs on one machine on the venue
 Wi-Fi — no internet needed on match day.
+
+Two capabilities have since been layered on top **without changing that**: a
+court-side phone can stream live video to viewers, and scores can be mirrored to
+a public web page anyone on the internet can open. Both are additive and
+optional — with no internet, or with Firebase credentials absent, the LAN app
+behaves exactly as before. See [STREAMING_UPGRADE.md](STREAMING_UPGRADE.md).
 
 ## Monorepo layout
 
@@ -30,9 +42,19 @@ packages/
             Run via `tsx src/index.ts` — never compiled to JS for normal
             use (see "Why tsx, not tsc" below).
   client/   React + TypeScript + Vite. Three role screens (admin, umpire,
-            TV) plus two "join" screens (see Join codes below).
+            TV) plus two "join" screens (see Join codes below), and the
+            two video-streaming screens (broadcaster + viewer).
   desktop/  Electron wrapper that packages the whole thing as a
             double-click Mac/Windows app. See its own section.
+```
+
+Plus one directory outside the workspaces:
+
+```
+public-viewer/   The public, internet-facing scoreboard + video page.
+                 Deliberately NOT a workspace and NOT built: plain HTML
+                 loading the Firebase SDK from a CDN, deployed straight to
+                 Firebase Hosting. See STREAMING_UPGRADE.md.
 ```
 
 ## Why tsx, not tsc, for the server
@@ -386,6 +408,45 @@ shared / 112 server / 186 client), up from 202.
    convention copies it to `dist/` root untouched, so every route sharing
    that one `index.html` (admin, TV, umpire, join) gets it for free.
 
+## Later session — video streaming and internet delivery
+
+Full detail lives in **[STREAMING_UPGRADE.md](STREAMING_UPGRADE.md)**; this is
+the short version of what changed in _this_ repo and what to watch out for.
+
+**What it added.** A court-side phone streams live video over WebRTC to LAN
+viewers, and — separately — scores and video reach a public Firebase-hosted page
+that anyone on the internet can open. The MJPEG implementation that preceded it
+(~2 FPS) is deleted.
+
+**What it did _not_ change.** The LAN app is untouched in behaviour. No internet,
+or no Firebase credentials, and everything works exactly as before: cloud sync
+logs a warning and disables itself, and the Socket.io signalling path keeps
+serving venue viewers. That was a deliberate constraint, not a happy accident —
+the venue network is the one that has to work.
+
+**Touch points in existing code, worth knowing about:**
+
+- `sockets/index.ts` — one added call at the single broadcast choke point pushes
+  each state change to Firestore. Fire-and-forget and _after_ the LAN emit, so a
+  slow uplink can never delay a point reaching the umpire's screen.
+- `main.js` — now passes `cwd` when spawning the server. Without it `dotenv`
+  never found `packages/server/.env` (see the Configuration reference warning).
+- `AdminDashboard.tsx` — each court row gained a public-link row.
+  `PUBLIC_SCOREBOARD_ORIGIN` there must match `.firebaserc`.
+- `firestore.rules` — scores are world-readable and **client-write-denied**;
+  the signalling subtree is open by necessity. `toPublicScoreboard()` is an
+  allow-list keeping `umpireToken` out of public documents.
+
+**The two most useful lessons**, both the hard way:
+
+1. **Don't verify playback with `--autoplay-policy=no-user-gesture-required`.**
+   It suppresses the exact failure real users hit; a black-screen bug was
+   measured as "working" because of it.
+2. **A viewer document is only cleaned up on `pagehide`**, which does not fire on
+   a crash or a force-quit — so abandoned entries accumulated and silently
+   consumed every connection slot. Anything holding per-client state in Firestore
+   needs a TTL, not just a tidy-up handler.
+
 ## Desktop app (`packages/desktop/`) — Electron wrapper
 
 **Why:** running the server required Node install + `npm install` + hand-
@@ -610,10 +671,24 @@ start` if that happens.
 
 ```
 PORT=3000                          # optional, defaults to 3000
+HTTPS_PORT=3001                    # optional, defaults to PORT + 1 (camera/secure-context listener)
 ADMIN_PASSWORD=<real password>     # optional, falls back to 'change-me' (insecure — always set this)
 DATABASE_URL="file:./dev.db"       # REQUIRED, no fallback — Prisma throws without it
 CLIENT_DIST_PATH=<path>            # optional, defaults to ../client/dist relative to CWD
+
+# Optional — cloud score sync only. Absent, the server logs
+# "[Cloud] Firebase credentials not found" and runs normally on the LAN.
+# All three are REQUIRED together; see STREAMING_UPGRADE.md section 7.
+FIREBASE_PROJECT_ID=<id>
+FIREBASE_PRIVATE_KEY="<pem with \n escapes>"
+FIREBASE_CLIENT_EMAIL=<service account email>
 ```
+
+⚠️ `dotenv` resolves `.env` from `process.cwd()`, **not** from the file's own
+location. The desktop app therefore passes `cwd: serverRootPath()` when spawning
+the server (`packages/desktop/src/main.js`). Anything else that launches the
+server must run it from `packages/server` or pass the variables explicitly —
+otherwise `.env` is silently ignored and cloud sync appears broken with no error.
 
 Note `.env.example` does **not** include `DATABASE_URL` — it has to be
 added by hand. This tripped me up once this session; worth fixing in
@@ -653,7 +728,19 @@ npm test              # Jest --coverage in every package
 on every metric except one intentionally-uncovered, documented branch in
 `AdminDashboard.tsx` (the not-yet-built "custom" scoring preset — see the
 comment at its call site) and one branch in `matches.ts` documented as an
-istanbul coverage-merge artifact in `packages/server/jest.config.cjs`. The
+istanbul coverage-merge artifact in `packages/server/jest.config.cjs`.
+
+⚠️ **The video-streaming and cloud-sync code is excluded from that claim.**
+`webrtc-stream.ts`, `firestore-signal.ts`, `sockets/stream.ts`,
+`integrations/cloud-sync.ts` and the two Stream screens have **no automated
+tests** — they were verified by driving real browsers (see
+STREAMING_UPGRADE.md), which is how every bug in them was actually found, but
+the coverage thresholds no longer describe the whole repo. `toPublicScoreboard()`
+in `cloud-sync.ts` is the highest-value gap: it is the allow-list that keeps the
+umpire's write token out of a world-readable Firestore document, and a
+regression there would leak credentials silently.
+
+The
 `packages/desktop` Electron app has **no automated tests** — it was
 validated manually (dev mode + actual packaged binaries + CDP against the
 real running server, and against a real smart TV for the `subgrid` fix),
@@ -663,27 +750,34 @@ if this app keeps evolving.
 
 ## Quick "where do I look for X" index
 
-| Want to change...              | Look in                                                                      |
-| ------------------------------ | ---------------------------------------------------------------------------- |
-| Scoring rules / win conditions | `packages/shared/src/scoring.ts`                                             |
-| Socket.io event names/payloads | `packages/shared/src/events.ts`                                              |
-| Admin API routes               | `packages/server/src/routes/{courts,matches,umpires}.ts`                     |
-| Live scoring socket handlers   | `packages/server/src/sockets/index.ts`                                       |
-| Umpire/TV/Admin screens        | `packages/client/src/routes/*.tsx`                                           |
-| Umpire court diagram           | `packages/client/src/routes/CourtDiagram.tsx`                                |
-| Umpire's spoken call text      | `packages/shared/src/calls.ts`                                               |
-| Confirm-before-acting dialog   | `packages/client/src/lib/ConfirmDialog.tsx`                                  |
-| Interval/break countdown       | `packages/client/src/lib/useCountdown.ts`                                    |
-| App-wide styling/theme         | `packages/client/src/styles.css`                                             |
-| Join-code entry flow           | `packages/client/src/routes/JoinScreen.tsx`                                  |
-| Error overlay (pre-React)      | `packages/client/index.html`                                                 |
-| Web page favicon               | `packages/client/public/favicon.png` (Vite copies `public/` verbatim)        |
-| Desktop app main process       | `packages/desktop/src/main.js`                                               |
-| Desktop app packaging config   | `packages/desktop/package.json` (`"build"` block)                            |
-| Desktop launcher window UI     | `packages/desktop/src/launcher.html` (plain HTML/JS, not the React app)      |
-| Tournament API routes          | `packages/server/src/routes/tournaments.ts`                                  |
-| Windows source zip helper      | `packages/desktop/scripts/pack-windows-source.js`                            |
-| Desktop app icon               | `packages/desktop/build-assets/` (`icon-source.html` is the editable source) |
+| Want to change...               | Look in                                                                       |
+| ------------------------------- | ----------------------------------------------------------------------------- |
+| Scoring rules / win conditions  | `packages/shared/src/scoring.ts`                                              |
+| Socket.io event names/payloads  | `packages/shared/src/events.ts`                                               |
+| Admin API routes                | `packages/server/src/routes/{courts,matches,umpires}.ts`                      |
+| Live scoring socket handlers    | `packages/server/src/sockets/index.ts`                                        |
+| Umpire/TV/Admin screens         | `packages/client/src/routes/*.tsx`                                            |
+| Umpire court diagram            | `packages/client/src/routes/CourtDiagram.tsx`                                 |
+| Umpire's spoken call text       | `packages/shared/src/calls.ts`                                                |
+| Confirm-before-acting dialog    | `packages/client/src/lib/ConfirmDialog.tsx`                                   |
+| Interval/break countdown        | `packages/client/src/lib/useCountdown.ts`                                     |
+| App-wide styling/theme          | `packages/client/src/styles.css`                                              |
+| Join-code entry flow            | `packages/client/src/routes/JoinScreen.tsx`                                   |
+| Error overlay (pre-React)       | `packages/client/index.html`                                                  |
+| Web page favicon                | `packages/client/public/favicon.png` (Vite copies `public/` verbatim)         |
+| Desktop app main process        | `packages/desktop/src/main.js`                                                |
+| Desktop app packaging config    | `packages/desktop/package.json` (`"build"` block)                             |
+| Desktop launcher window UI      | `packages/desktop/src/launcher.html` (plain HTML/JS, not the React app)       |
+| Tournament API routes           | `packages/server/src/routes/tournaments.ts`                                   |
+| Windows source zip helper       | `packages/desktop/scripts/pack-windows-source.js`                             |
+| Desktop app icon                | `packages/desktop/build-assets/` (`icon-source.html` is the editable source)  |
+| **Video streaming (any of it)** | **[STREAMING_UPGRADE.md](STREAMING_UPGRADE.md)** — start there, not here      |
+| Broadcaster / viewer screens    | `packages/client/src/routes/Stream{Broadcast,Viewer}.tsx`                     |
+| WebRTC over the LAN             | `packages/client/src/lib/webrtc-stream.ts` + `server/src/sockets/stream.ts`   |
+| WebRTC to internet viewers      | `packages/client/src/lib/firestore-signal.ts`                                 |
+| Public internet scoreboard      | `public-viewer/index.html` (static, no build step)                            |
+| Cloud score sync to Firestore   | `packages/server/src/integrations/cloud-sync.ts` (hook at `sockets/index.ts`) |
+| Firebase project / rules        | `.firebaserc`, `firebase.json`, `firestore.rules`                             |
 
 ## Packaged desktop recovery: `tsx`, legacy SQLite databases, and a broken Mac signature
 

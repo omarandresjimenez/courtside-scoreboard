@@ -28,5 +28,3 @@ export async function requestCameraStream(): Promise<MediaStream> {
     audio: false,
   });
 }
-
-

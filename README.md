@@ -5,6 +5,14 @@ matches, an umpire scores them from a phone or tablet, and TV screens at
 each court display the live score. No internet connection is required on
 match day; everything runs on one machine over a local Wi-Fi network.
 
+Optionally, a court-side phone can also **stream live video** to viewers, and
+scores can be mirrored to a **public web page** anyone on the internet can open.
+Both are additive: with no internet — or no Firebase credentials configured —
+the app behaves exactly as described above. See
+[STREAMING_UPGRADE.md](STREAMING_UPGRADE.md) for how that works and what it
+needs; [HANDOFF.md](HANDOFF.md) is the "how it actually works and why" doc for
+everything else.
+
 The full design spec (architecture, scoring rules, screens, data model,
 event contract) lives in the private working doc this project was
 scaffolded from — see your Courtside Scoreboard artifact for the complete

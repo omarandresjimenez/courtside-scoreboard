@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { requestCameraStream } from '../lib/camera-stream.js';
 import { startBroadcasting, type BroadcasterHandle } from '../lib/webrtc-stream.js';
+import { broadcastToInternet, type InternetBroadcastHandle } from '../lib/firestore-signal.js';
+import { firebaseConfig } from '../lib/firebase-config.js';
 
 type BroadcastStatus = 'idle' | 'starting' | 'live' | 'paused' | 'error';
 
@@ -26,12 +28,15 @@ export function StreamBroadcast() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const broadcasterRef = useRef<BroadcasterHandle | null>(null);
+  const internetRef = useRef<InternetBroadcastHandle | null>(null);
   const [status, setStatus] = useState<BroadcastStatus>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [internetViewers, setInternetViewers] = useState(0);
 
   useEffect(() => {
     return () => {
       broadcasterRef.current?.stop();
+      internetRef.current?.stop();
       streamRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
@@ -45,6 +50,22 @@ export function StreamBroadcast() {
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
       broadcasterRef.current = startBroadcasting(courtId, stream);
+      // Second, independent signalling path for viewers watching from outside
+      // the venue (see firestore-signal.ts). Run alongside the LAN one rather
+      // than instead of it: the Socket.io path is the only one that still works
+      // when the venue has no internet uplink, which is the situation this app
+      // is built to survive. Failure here must not take the LAN broadcast down
+      // with it, hence the try/catch.
+      try {
+        internetRef.current = broadcastToInternet(
+          firebaseConfig,
+          courtId,
+          stream,
+          setInternetViewers,
+        );
+      } catch (err) {
+        console.warn('Internet broadcast unavailable (LAN streaming unaffected):', err);
+      }
       setStatus('live');
     } catch (err) {
       console.error('Camera start failed:', err);
@@ -63,6 +84,9 @@ export function StreamBroadcast() {
   function handleStop() {
     broadcasterRef.current?.stop();
     broadcasterRef.current = null;
+    internetRef.current?.stop();
+    internetRef.current = null;
+    setInternetViewers(0);
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     setStatus('idle');
@@ -111,7 +135,25 @@ export function StreamBroadcast() {
       </div>
 
       <p className="broadcast-status" role="status">
-        Status: {status === 'live' ? 'Transmitting' : status === 'paused' ? 'Paused' : status === 'starting' ? 'Starting…' : status === 'error' ? 'Error' : 'Idle'}
+        Status:{' '}
+        {status === 'live'
+          ? 'Transmitting'
+          : status === 'paused'
+            ? 'Paused'
+            : status === 'starting'
+              ? 'Starting…'
+              : status === 'error'
+                ? 'Error'
+                : 'Idle'}
+        {isLiveOrPaused && (
+          <>
+            {' · '}
+            {/* Each internet viewer is a separate encoded upload from this
+                phone, so this number is the thing to watch if the picture
+                starts degrading — not a vanity counter. */}
+            🌐 {internetViewers} internet viewer{internetViewers === 1 ? '' : 's'}
+          </>
+        )}
       </p>
     </main>
   );

@@ -52,9 +52,23 @@ function devIconPath() {
 }
 
 function serverEntryPath() {
+  return path.join(serverRootPath(), 'src', 'index.ts');
+}
+
+/**
+ * The server package's own directory, used as the child process's `cwd`.
+ *
+ * This matters beyond tidiness: the server calls `import 'dotenv/config'`,
+ * which loads `.env` relative to `process.cwd()`. Without this the child
+ * inherited Electron's cwd (packages/desktop, or `/` for a packaged app) and
+ * never found `packages/server/.env` — so Firebase credentials were silently
+ * invisible and cloud sync stayed disabled, with the public scoreboard link in
+ * the admin dashboard quietly showing "waiting for a match" forever.
+ */
+function serverRootPath() {
   return app.isPackaged
-    ? path.join(process.resourcesPath, 'server', 'src', 'index.ts')
-    : path.join(__dirname, '..', '..', 'server', 'src', 'index.ts');
+    ? path.join(process.resourcesPath, 'server')
+    : path.join(__dirname, '..', '..', 'server');
 }
 
 function clientDistPath() {
@@ -168,6 +182,10 @@ function startServer(cfg) {
   serverState = { status: 'starting', message: '' };
 
   serverProcess = spawn(process.execPath, [tsxCliPath(), serverEntryPath()], {
+    // See serverRootPath(): dotenv resolves `.env` from cwd, so this is what
+    // lets the packaged app pick up Firebase credentials at all. Everything
+    // else the server needs is passed absolutely below, so moving cwd is safe.
+    cwd: serverRootPath(),
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',

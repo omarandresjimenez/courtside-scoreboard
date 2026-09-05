@@ -102,6 +102,28 @@ function tvLinkFor(court: Pick<Court, 'courtId'>): string {
   return absoluteUrl(`/tv/court/${court.courtId}`);
 }
 
+/**
+ * Firebase Hosting site for the public scoreboard. Must match the project in
+ * `.firebaserc` — deploying to a different project means changing this too.
+ *
+ * Not derived from window.location like the links above: every other link here
+ * points back at this LAN server, but this one deliberately does not. It is the
+ * only address that works from outside the venue.
+ */
+const PUBLIC_SCOREBOARD_ORIGIN = 'https://courtside-scoreboard-86e96.web.app';
+
+/**
+ * The internet-facing view of a court — safe to share publicly.
+ *
+ * Shows the live score and, when the court is broadcasting, the video too. It
+ * needs no access to this machine at all: the score arrives via Firestore (see
+ * syncScoreToCloud) and the video is negotiated through Firestore signalling
+ * (see firestore-signal.ts), then flows peer-to-peer from the phone.
+ */
+function publicScoreLinkFor(court: Pick<Court, 'courtId'>): string {
+  return `${PUBLIC_SCOREBOARD_ORIGIN}/?court=${encodeURIComponent(court.courtId)}`;
+}
+
 function streamBroadcastLinkFor(match: Pick<Match, 'assignedCourtId'>): string {
   if (!match.assignedCourtId) return '#';
   const path = `/stream/court/${match.assignedCourtId}`;
@@ -433,7 +455,14 @@ export function AdminDashboard() {
                           value={tvLinkFor(c)}
                           onFocus={(e) => e.target.select()}
                         />
-                        <button type="button" onClick={() => void handleCopy(tvLinkFor(c))}>
+                        {/* Labelled rather than left as a bare "Copy": there are
+                            two copy buttons per court now, and by voice alone
+                            they were indistinguishable. */}
+                        <button
+                          type="button"
+                          aria-label={`Copy TV link for ${c.label}`}
+                          onClick={() => void handleCopy(tvLinkFor(c))}
+                        >
                           Copy
                         </button>
                         <button
@@ -442,6 +471,31 @@ export function AdminDashboard() {
                           onClick={() => void deleteCourt(c.courtId)}
                         >
                           Remove
+                        </button>
+                      </div>
+                      {/* Kept visually distinct from the LAN links above: this
+                          is the one address that leaves the venue, so mixing it
+                          in unlabelled invites sharing a 192.168.x link with
+                          someone at home (or this one with the TV). */}
+                      <div className="court-row-actions public-link-row">
+                        <span
+                          className="public-link-label"
+                          title="Anyone on the internet can open this"
+                        >
+                          🌐 Public score
+                        </span>
+                        <input
+                          aria-label="Public internet scoreboard link"
+                          readOnly
+                          value={publicScoreLinkFor(c)}
+                          onFocus={(e) => e.target.select()}
+                        />
+                        <button
+                          type="button"
+                          aria-label={`Copy public internet link for ${c.label}`}
+                          onClick={() => void handleCopy(publicScoreLinkFor(c))}
+                        >
+                          Copy
                         </button>
                       </div>
                     </li>

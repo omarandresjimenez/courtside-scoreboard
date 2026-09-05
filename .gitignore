@@ -38,3 +38,6 @@ coverage/
 
 # husky internal
 .husky/_
+
+# Firebase CLI deploy cache
+.firebase/

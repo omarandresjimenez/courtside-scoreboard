@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Courtside — Live Score</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🏸</text></svg>"
+    />
+    <style>
+      :root {
+        --bg: #0a0e1a;
+        --bg-raised: #12182b;
+        --border: rgba(148, 163, 184, 0.16);
+        --border-strong: rgba(148, 163, 184, 0.3);
+        --text: #f1f5f9;
+        --text-dim: #94a3b8;
+        --side-a: #22d3ee;
+        --side-b: #c084fc;
+        --accent: #22d3ee;
+        --warning: #fbbf24;
+        --success: #34d399;
+        --radius: 0.75rem;
+        --radius-sm: 0.5rem;
+        color-scheme: dark;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          'Segoe UI',
+          Roboto,
+          sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      /* An author `display:` beats the UA stylesheet's `[hidden]{display:none}`,
+         so .stage (display:flex) would stay visible while still marked hidden. */
+      [hidden] {
+        display: none !important;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: radial-gradient(ellipse 120% 80% at 50% -10%, #131c33 0%, var(--bg) 55%);
+        color: var(--text);
+        -webkit-font-smoothing: antialiased;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 4vh 4vw;
+        gap: 1.5vh;
+      }
+
+      /* Broadcast-style score bug: a small translucent panel sitting over the
+         video's top-left corner, the way TV sports overlays a score without
+         taking a whole quarter of the screen away from the picture. */
+      .scorebug {
+        position: absolute;
+        top: 0.9rem;
+        left: 0.9rem;
+        /* vw-capped so the bug stays proportional on a phone, where a fixed
+           11rem would eat half the width of a portrait video. */
+        min-width: min(11rem, 38vw);
+        max-width: min(60vw, 22rem);
+        border-radius: var(--radius-sm);
+        background: rgba(10, 14, 26, 0.62);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+        overflow: hidden;
+        font-size: clamp(0.8rem, 1.6vw, 0.95rem);
+        /* Independent of the video's own scale — the bug reads at a
+           comfortable size whether the stage is a phone strip or a full
+           16:9 desktop window. */
+        z-index: 5;
+        opacity: 0.40;
+      }
+      .bug-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.3em 0.6em;
+        background: rgba(34, 211, 238, 0.1);
+        color: var(--accent);
+        font-size: 0.85em;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+      .bug-live {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3em;
+        color: var(--text-dim);
+        font-weight: 600;
+      }
+      .bug-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6em;
+        padding: 0.32em 0.6em;
+        border-top: 1px solid rgba(148, 163, 184, 0.15);
+      }
+      .bug-row .name {
+        display: flex;
+        align-items: center;
+        gap: 0.4em;
+        min-width: 0;
+        font-size: 1.05em;
+        font-weight: 700;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .bug-row.a .name {
+        color: var(--side-a);
+      }
+      .bug-row.b .name {
+        color: var(--side-b);
+      }
+      .bug-row .scores {
+        display: flex;
+        gap: 0.45em;
+        flex-shrink: 0;
+      }
+      .bug-row strong {
+        min-width: 1.3em;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+        font-size: 1.1em;
+        color: var(--text-dim);
+      }
+      .bug-row strong.live {
+        color: var(--warning);
+        font-weight: 800;
+        font-size: 1.3em;
+      }
+      .bug-row strong.winner {
+        color: var(--success);
+      }
+      .serve {
+        display: inline-flex;
+        padding: 0.1em 0.4em;
+        border-radius: 999px;
+        background: rgba(52, 211, 153, 0.18);
+        color: var(--success);
+        font-size: 0.62em;
+        font-weight: 700;
+        text-transform: uppercase;
+        flex-shrink: 0;
+      }
+      .winner-name {
+        color: var(--success) !important;
+      }
+      /* Video stage. The score rides on top of it as a bug rather than sitting
+         underneath, so the picture can claim nearly the whole viewport. */
+      .stage {
+        position: relative;
+        width: min(1400px, 94vw);
+        aspect-ratio: 16 / 9;
+        max-height: 88vh;
+        background: #000;
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius);
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #video {
+        width: 100%;
+        height: 100%;
+        /* contain, not cover: a phone filming in portrait would otherwise be
+           cropped to a letterbox that cuts the players out of frame. */
+        object-fit: contain;
+        display: none;
+      }
+      .stage.playing #video {
+        display: block;
+      }
+      .stage.playing .vidmsg {
+        display: none;
+      }
+      .vidmsg {
+        position: absolute;
+        padding: 0 1.5rem;
+        color: var(--text-dim);
+        font-size: 1rem;
+        text-align: center;
+      }
+
+      .status {
+        color: var(--text-dim);
+        font-size: 0.95rem;
+        margin: 0;
+        text-align: center;
+      }
+      .status.err {
+        color: #f87171;
+      }
+      code {
+        font-family: ui-monospace, monospace;
+        background: var(--bg-raised);
+        border: 1px solid var(--border);
+        border-radius: 0.4rem;
+        padding: 0.1rem 0.4rem;
+      }
+      .dot {
+        width: 0.5rem;
+        height: 0.5rem;
+        border-radius: 50%;
+        background: var(--success);
+        display: inline-block;
+        margin-right: 0.45rem;
+      }
+      .dot.stale {
+        background: var(--text-dim);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage" id="stage" hidden>
+      <video id="video" autoplay playsinline muted></video>
+      <div class="vidmsg" id="vidmsg">Waiting for the court to start the camera…</div>
+
+      <!-- Broadcast-style score bug, over the video in the top-left. -->
+      <div class="scorebug" id="board" hidden>
+        <div class="bug-head">
+          <span id="court">Court</span>
+          <span class="bug-live"
+            ><span class="dot" id="dot"></span><span id="liveText">Live</span></span
+          >
+        </div>
+        <div class="bug-row a" id="rowA"></div>
+        <div class="bug-row b" id="rowB"></div>
+      </div>
+    </div>
+
+    <p class="status" id="status">Connecting…</p>
+
+    <script type="module">
+      import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js';
+      import {
+        getFirestore,
+        doc,
+        onSnapshot,
+        collection,
+        addDoc,
+        setDoc,
+        deleteDoc,
+        getDocs,
+      } from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js';
+      import { firebaseConfig } from './firebase-config.js';
+
+      const params = new URLSearchParams(location.search);
+      // Accept ?court=<id> or a trailing path segment, so both a query link and
+      // a clean /<courtId> URL work.
+      const courtId = params.get('court') || location.pathname.replace(/^\/+|\/+$/g, '');
+
+      const $ = (id) => document.getElementById(id);
+      const statusEl = $('status');
+
+      function setStatus(text, isError = false) {
+        statusEl.textContent = text;
+        statusEl.classList.toggle('err', isError);
+        statusEl.hidden = false;
+      }
+
+      if (!courtId) {
+        setStatus(
+          'This link is missing a court. Ask the organiser for the full viewer link.',
+          true,
+        );
+      } else {
+        const db = getFirestore(initializeApp(firebaseConfig));
+        let lastUpdate = 0;
+
+        onSnapshot(
+          doc(db, 'matches', courtId),
+          (snap) => {
+            if (!snap.exists()) {
+              setStatus('Waiting for a match on this court…');
+              $('board').hidden = true;
+              return;
+            }
+            lastUpdate = Date.now();
+            render(snap.data());
+          },
+          (err) => setStatus(`Could not load this match (${err.code}).`, true),
+        );
+
+        // The score only changes when a point is scored, so a quiet document is
+        // normal, not a fault — this just dims the indicator rather than
+        // claiming anything is broken.
+        setInterval(() => {
+          if (!lastUpdate) return;
+          const quiet = Date.now() - lastUpdate > 30000;
+          $('dot').classList.toggle('stale', quiet);
+          $('liveText').textContent = quiet ? 'Idle' : 'Live';
+        }, 5000);
+
+        watchVideo(db, courtId);
+      }
+
+      /**
+       * Join the court's WebRTC broadcast as an internet viewer.
+       *
+       * Signalling goes through Firestore rather than the venue's Socket.io
+       * server, which is on a private LAN address no outside viewer can reach.
+       * The media itself still flows peer-to-peer, phone → here.
+       *
+       * STUN only for now: many networks connect fine without a relay, and
+       * that is worth confirming before paying for TURN bandwidth. If this
+       * stays stuck at "connecting" on mobile data, symmetric NAT is why, and
+       * TURN is the fix.
+       */
+      async function watchVideo(db, courtId) {
+        const stage = $('stage');
+        const video = $('video');
+        stage.hidden = false;
+
+        const streamDoc = doc(db, 'streams', courtId);
+        // Random per-tab id: two people watching must not share an entry, or
+        // they would fight over the same offer/answer pair.
+        const viewerId = `v_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
+        const viewerDoc = doc(db, 'streams', courtId, 'viewers', viewerId);
+
+        const pc = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        });
+        const remote = new MediaStream();
+        video.srcObject = remote;
+
+        pc.ontrack = (event) => {
+          event.streams[0]?.getTracks().forEach((t) => remote.addTrack(t));
+          stage.classList.add('playing');
+          // muted + explicit play(): browsers block autoplay of unmuted media
+          // without a user gesture, and a viewer arriving from a shared link
+          // has made none. This is the same trap the LAN viewer hit.
+          video.play().catch((e) => console.warn('autoplay blocked:', e));
+        };
+
+        pc.onconnectionstatechange = () => {
+          if (pc.connectionState === 'connected') setVideoMsg(null);
+          if (pc.connectionState === 'failed') {
+            stage.classList.remove('playing');
+            setVideoMsg('Could not reach the camera. The court may be on a restricted network.');
+          }
+          if (pc.connectionState === 'disconnected') {
+            stage.classList.remove('playing');
+            setVideoMsg('Camera disconnected.');
+          }
+        };
+
+        const answerCandidates = collection(viewerDoc, 'answerCandidates');
+        pc.onicecandidate = (e) => {
+          if (e.candidate) addDoc(answerCandidates, e.candidate.toJSON()).catch(() => {});
+        };
+
+        // Announce ourselves; the broadcaster answers by writing an offer here.
+        await setDoc(viewerDoc, { requestedAt: Date.now() });
+
+        onSnapshot(viewerDoc, async (snap) => {
+          const offer = snap.data()?.offer;
+          if (!offer || pc.currentRemoteDescription) return;
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await setDoc(
+            viewerDoc,
+            { answer: { type: answer.type, sdp: answer.sdp } },
+            { merge: true },
+          );
+        });
+
+        onSnapshot(collection(viewerDoc, 'offerCandidates'), (snap) => {
+          snap.docChanges().forEach((c) => {
+            if (c.type === 'added') {
+              pc.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(() => {});
+            }
+          });
+        });
+
+        // Tell the viewer whether anyone is even broadcasting, so "no video"
+        // reads as a fact about the court rather than a broken page.
+        onSnapshot(streamDoc, (snap) => {
+          if (!snap.exists() || !snap.data()?.live) {
+            if (!stage.classList.contains('playing')) {
+              setVideoMsg('Waiting for the court to start the camera…');
+            }
+          } else if (!stage.classList.contains('playing')) {
+            setVideoMsg('Connecting to the court camera…');
+          }
+        });
+
+        // Best-effort cleanup so the broadcaster stops holding a peer for a tab
+        // that has gone away. Not guaranteed to run — hence the broadcaster
+        // also drops peers whose connection fails.
+        addEventListener('pagehide', () => {
+          try {
+            pc.close();
+            getDocs(answerCandidates).then((s) => s.forEach((d) => deleteDoc(d.ref)));
+            deleteDoc(viewerDoc);
+          } catch {
+            /* the page is going away regardless */
+          }
+        });
+      }
+
+      function setVideoMsg(text) {
+        const el = $('vidmsg');
+        if (text === null) return;
+        el.textContent = text;
+      }
+
+      const firstName = (n) => (n || '').split(/\s+/)[0] || n || '';
+
+      function sideName(data, side) {
+        const names = (data.players || [])
+          .filter((p) => p.side === side)
+          .map((p) => firstName(p.name) || p.shortName);
+        return names.join(' / ') || side;
+      }
+
+      function render(data) {
+        const d = data.derived || {};
+        // Mirror the app's own ordering: completed sets, then the one in play.
+        const sets = d.matchWinner
+          ? d.sets || []
+          : [
+              ...(d.sets || []).filter((s) => s.setNumber !== d.currentSet?.setNumber),
+              ...(d.currentSet ? [d.currentSet] : []),
+            ];
+        const shown = sets.length ? sets : [{ setNumber: 1, scoreA: 0, scoreB: 0 }];
+
+        $('court').textContent = data.courtLabel || 'Court';
+        $('board').hidden = false;
+
+        for (const side of ['A', 'B']) {
+          const serving = d.serve?.servingSide === side && !d.matchWinner;
+          const won = d.matchWinner === side;
+          const scores = shown
+            .map((s) => {
+              const v = side === 'A' ? s.scoreA : s.scoreB;
+              const cls = [s.winner ? '' : 'live', s.winner === side ? 'winner' : '']
+                .filter(Boolean)
+                .join(' ');
+              return `<strong class="${cls}">${v ?? 0}</strong>`;
+            })
+            .join('');
+          $(`row${side}`).innerHTML =
+            `<span class="name${won ? ' winner-name' : ''}">` +
+            escapeHtml(sideName(data, side)) +
+            (serving ? '<span class="serve">Serv</span>' : '') +
+            '</span>' +
+            `<span class="scores">${scores}</span>`;
+        }
+
+        if (d.matchWinner) {
+          setStatus(`${sideName(data, d.matchWinner)} wins the match`);
+        } else if (d.interval) {
+          setStatus(d.interval.kind === 'MID_GAME' ? 'Interval' : 'Game interval');
+        } else {
+          statusEl.hidden = true;
+        }
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(
+          /[&<>"']/g,
+          (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+        );
+      }
+    </script>
+  </body>
+</html>

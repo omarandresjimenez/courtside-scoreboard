@@ -13,6 +13,7 @@ import {
 import { Prisma } from '../../generated/prisma/index.js';
 import { prisma } from '../db/client.js';
 import { loadMatchState } from '../match/replay.js';
+import { syncScoreToCloud, toPublicScoreboard } from '../integrations/cloud-sync.js';
 
 function roomForMatch(matchId: string): string {
   return `match:${matchId}`;
@@ -248,7 +249,35 @@ async function withAuthorizedMatch(
   }
 
   const refreshedState = await loadMatchState(matchId);
-  if (refreshedState) io.to(roomForMatch(matchId)).emit(SERVER_EVENTS.MATCH_STATE, refreshedState);
+  if (refreshedState) {
+    io.to(roomForMatch(matchId)).emit(SERVER_EVENTS.MATCH_STATE, refreshedState);
+    publishScoreToCloud(refreshedState);
+  }
+}
+
+/**
+ * Mirror the just-broadcast state to Firestore for internet viewers.
+ *
+ * Deliberately fire-and-forget, and deliberately *after* the LAN broadcast
+ * above: the local network is the source of truth on match day, and a slow or
+ * unreachable internet connection must never delay a point appearing on the
+ * umpire's screen or the court TV — nor throw into the caller and abort the
+ * scoring flow. A failed sync is logged inside cloud-sync and otherwise
+ * ignored; the next point re-sends the whole state anyway, so a dropped
+ * update self-heals rather than needing a retry queue.
+ *
+ * Sends the allow-listed projection only — the raw state contains the
+ * umpire's write credentials (see toPublicScoreboard).
+ */
+function publishScoreToCloud(state: { match: { assignedCourtId: string | null } }): void {
+  const courtId = state.match.assignedCourtId;
+  if (!courtId) return; // No court, no public scoreboard to publish to.
+  void syncScoreToCloud(
+    courtId,
+    toPublicScoreboard(state as unknown as { match: Record<string, unknown>; derived: unknown }),
+  ).catch(() => {
+    // Already logged by cloud-sync; never surface to the scoring path.
+  });
 }
 
 async function sendCurrentState(socket: Socket, matchId: string): Promise<void> {
