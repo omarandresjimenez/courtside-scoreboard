@@ -5,7 +5,6 @@
 // silently disabled even with every credential correctly set.
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
-import { v2 as cloudinary } from 'cloudinary';
 
 let db: Firestore | undefined;
 let isInitialized = false;
@@ -52,22 +51,6 @@ export function initializeCloudServices() {
   } catch (error) {
     console.error('[Cloud] Firebase initialization failed:', error);
     isInitialized = false;
-  }
-
-  // Initialize Cloudinary
-  if (
-    process.env.CLOUDINARY_CLOUD_NAME &&
-    process.env.CLOUDINARY_API_KEY &&
-    process.env.CLOUDINARY_API_SECRET
-  ) {
-    cloudinary.config({
-      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-      api_key: process.env.CLOUDINARY_API_KEY,
-      api_secret: process.env.CLOUDINARY_API_SECRET,
-    });
-    console.log('[Cloud] Cloudinary configured');
-  } else {
-    console.warn('[Cloud] Cloudinary credentials not found');
   }
 }
 
@@ -157,61 +140,3 @@ export async function syncScoreToCloud(
     return false;
   }
 }
-
-/**
- * Upload video frame to Cloudinary
- */
-export async function uploadFrameToCloud(
-  courtId: string,
-  jpegBuffer: Buffer,
-): Promise<string | null> {
-  if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY) {
-    console.debug('[Cloud] Cloudinary not configured, skipping upload');
-    return null;
-  }
-
-  try {
-    // Convert buffer to base64 data URI
-    const dataUri = `data:image/jpeg;base64,${jpegBuffer.toString('base64')}`;
-
-    const result = await cloudinary.uploader.upload(dataUri, {
-      folder: `courtside/court-${courtId}`,
-      public_id: `latest-frame`,
-      overwrite: true,
-      resource_type: 'image',
-      quality: 'auto',
-      fetch_format: 'auto',
-    });
-
-    console.log(`[Cloud] Frame uploaded: ${result.secure_url}`);
-    return result.secure_url;
-  } catch (error) {
-    console.error('[Cloud] Frame upload failed:', error);
-    return null;
-  }
-}
-
-/**
- * Update Firestore with video frame URL
- */
-export async function updateFrameUrl(courtId: string, frameUrl: string): Promise<boolean> {
-  if (!isInitialized || !db) {
-    console.debug('[Cloud] Cloud sync not initialized, skipping');
-    return false;
-  }
-
-  try {
-    await db.collection('matches').doc(courtId).update({
-      videoFrameUrl: frameUrl,
-      videoFrameUpdatedAt: new Date(),
-    });
-
-    console.log(`[Cloud] Frame URL updated for court ${courtId}`);
-    return true;
-  } catch (error) {
-    console.error('[Cloud] Frame URL update failed:', error);
-    return false;
-  }
-}
-
-export { db as firestore };

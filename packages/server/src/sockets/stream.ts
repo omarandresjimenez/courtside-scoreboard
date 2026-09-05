@@ -55,10 +55,14 @@ export function registerStreamSocketHandlers(io: Server): void {
       }
 
       socket.on('disconnect', () => {
-        if (broadcasterByCourtId.get(courtId) === socket.id) {
-          broadcasterByCourtId.delete(courtId);
-          pausedByCourtId.delete(courtId);
-        }
+        // Only the *current* broadcaster's departure ends the stream. A phone
+        // that drops wifi and reconnects briefly leaves two broadcaster
+        // sockets on the court; when the stale one finally times out, an
+        // unconditional notice here told every viewer the broadcast was over
+        // and tore down their connections to the live one.
+        if (broadcasterByCourtId.get(courtId) !== socket.id) return;
+        broadcasterByCourtId.delete(courtId);
+        pausedByCourtId.delete(courtId);
         socket.to(room).emit(STREAM_EVENTS.BROADCASTER_LEFT);
       });
     } else {

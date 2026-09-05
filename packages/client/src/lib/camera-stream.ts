@@ -28,3 +28,19 @@ export async function requestCameraStream(): Promise<MediaStream> {
     audio: false,
   });
 }
+
+/** Turn a getUserMedia rejection into something a court-side volunteer can act
+ *  on. The DOMException names are the actionable cases; anything else falls
+ *  through to the browser's own message rather than being flattened. */
+export function cameraErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    if (err.name === 'NotAllowedError') {
+      return 'Camera permission was denied. Allow camera access in your browser settings and try again.';
+    }
+    if (err.name === 'NotFoundError') {
+      return 'No camera was found on this device.';
+    }
+    return err.message;
+  }
+  return 'Failed to access the camera.';
+}

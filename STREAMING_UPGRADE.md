@@ -185,6 +185,47 @@ arrived behind it. `StreamBroadcast.tsx` already had `muted`; the viewer didn't.
 > Fixed with `muted` plus a defensive `element.play().catch(...)`, since some
 > smart-TV browsers ignore `autoPlay` when `srcObject` is assigned after mount.
 
+### 5b. Bugs found during the later refactor (by test, not by hand)
+
+A separate pass applied the `realtime-video-react` and `react-firebase-architecture`
+skills, adding unit tests for code that had none. That coverage work surfaced three
+more real defects — a different discovery method from section 5's manual browser
+driving, worth calling out because each was **confirmed by running its new test
+against the pre-fix code and watching it fail**, not just written and trusted:
+
+**5. Firestore listener leak.** `broadcastToInternet` created two `onSnapshot`
+subscriptions per viewer (its answer doc, its ICE candidates) and discarded both
+unsubscribe functions. Closing the `RTCPeerConnection` does not detach a Firestore
+listener, so every viewer that came and went left two live listeners billing reads
+for the rest of the broadcast. Fixed by collecting each viewer's teardown callbacks
+in a `PeerSession` and releasing them together on disconnect, timeout, or `stop()`.
+
+**6. A reconnecting broadcaster killed its own live stream.** The server's
+broadcaster `disconnect` handler fired `STREAM_EVENTS.BROADCASTER_LEFT`
+unconditionally. A phone that drops wifi and reconnects leaves two broadcaster
+sockets briefly alive on the same court; when the _stale_ one finally timed out,
+its disconnect handler told every viewer the stream had ended — tearing down
+connections to the broadcaster that was still live. Fixed by checking
+`broadcasterByCourtId.get(courtId) === socket.id` before announcing the stream
+over, so only the current broadcaster's departure counts.
+
+**7. A pause would have fired its viewer notice twice (caught before shipping).**
+An early draft of the pause toggle computed the next state and called
+`broadcaster.setVideoEnabled(...)` inside a `setStatus` updater function. React
+StrictMode (already enabled in `main.tsx`) invokes updaters twice, which would have
+emitted the pause signal to every viewer twice per press. Moved the side effect
+out of the updater before it ever reached a commit.
+
+**The internet-only viewer pause gap.** Not a bug in shipped code so much as an
+incomplete feature: `stream:paused` only ever travelled over Socket.io, so an
+internet viewer watching via Firestore signalling saw a frozen black frame with
+no explanation when the court paused — indistinguishable from their own
+connection breaking. Closed by adding `paused` to the `streams/{courtId}`
+Firestore document (`InternetBroadcastHandle.setPaused`), read by both
+`StreamViewer.tsx` and the public viewer, each showing an explicit _"Camera
+paused — nothing is wrong with your connection"_ card rather than the old bare
+badge. See section 6c.
+
 ---
 
 ## 6. ✅ Internet delivery, Stage 1 — public live scoreboard
@@ -334,6 +375,81 @@ a desktop and a phone viewer still connected, with all six purged.
 
 ---
 
+## 6c. Full screen, home-screen install & screen wake lock
+
+Phones are the primary device for two of these screens — the court-side
+broadcaster and the LAN/internet viewer — so their chrome (URL bar, tab strip)
+and their tendency to sleep mid-match are real usability problems, not
+cosmetic ones.
+
+### Full screen: `useFullscreen`
+
+`packages/client/src/lib/useFullscreen.ts`. The one platform-specific trap:
+**iPhone Safari has no `Element.requestFullscreen()` at all** — only
+`HTMLVideoElement.webkitEnterFullscreen()`. The hook detects support by
+probing both `document.fullscreenEnabled` and that video method, and falls
+back to fullscreening just the `<video>` when the container itself cannot go
+fullscreen. On that fallback path the page never actually enters fullscreen
+(iOS draws its own chrome for it), so `isFullscreen` correctly stays `false`
+and no `fullscreenchange` fires. `FullscreenButton.tsx` renders nothing at
+all where neither route exists, rather than offering a control that silently
+does nothing when tapped.
+
+Wired into `StreamViewer.tsx` (fullscreens the video container) and
+`StreamBroadcast.tsx` (fullscreens the whole panel, so Pause/Stop stay
+reachable) and the public viewer (plain JS, same fallback logic inlined).
+
+### Add to Home Screen (true chrome-less UI on iPhone)
+
+Full-screen video is not the same as hiding the address bar around a control
+panel — iPhone Safari has no API for that at all. The only route is
+installing the page: `manifest.webmanifest` + `apple-mobile-web-app-*` meta
+tags on both `packages/client/index.html` and `public-viewer/index.html`,
+with 192px/512px icons generated from the desktop app's existing 1024px icon.
+
+**This only fully works on the Firebase-hosted public viewer.** The LAN pages
+are served over the desktop app's self-signed HTTPS cert, and Chrome on
+Android refuses to offer a PWA install over an untrusted certificate — so on
+Android, the LAN broadcaster/viewer get the fullscreen button only, while
+Add to Home Screen is iPhone-only there. The public viewer, with a real
+certificate, gets both routes on both platforms.
+
+`viewport-fit=cover` plus `env(safe-area-inset-*)` padding in `styles.css`
+and the public viewer's inline CSS keep content clear of the notch and home
+indicator once installed with `apple-mobile-web-app-status-bar-style:
+black-translucent` — without the insets, the score overlay and the
+fullscreen button render underneath both.
+
+### Screen wake lock
+
+`useWakeLock.ts` holds `navigator.wakeLock.request('screen')` while a flag is
+true — on the broadcaster while `status` is `live` or `paused`, on the viewer
+only while a stream is actually playing. Exists because a sleeping phone
+suspends camera capture, which kills the broadcast in a way that looks from
+outside exactly like a crash.
+
+Two things worth knowing before debugging a "sleep" report:
+
+- The browser **silently drops the lock whenever the tab is backgrounded**
+  and does not restore it on return — the hook re-acquires it on
+  `visibilitychange`, but a wake lock alone will not survive a phone call or
+  a swipe to another app for long stretches.
+- The API **needs a secure context**. It works on the HTTPS broadcaster page
+  (port 3001) and the public viewer, but silently no-ops (with a console
+  warning, not a thrown error) on the plain-HTTP LAN viewer (port 3000).
+
+### Camera-paused message on every screen, not just the LAN one
+
+`stream:paused` (Socket.io) already reached the LAN viewer, which showed a
+small badge. The Firestore path (`streams/{courtId}.paused`, set via
+`InternetBroadcastHandle.setPaused`) now carries the same fact to internet
+viewers, and both screens — plus the public viewer — show an explicit card:
+**"Camera paused — nothing is wrong with your connection."** Before this, an
+internet viewer watching a paused camera saw a frozen black frame
+indistinguishable from their own connection breaking. See bug note in 5b.
+
+---
+
 ## 7. Configuration required
 
 Everything needed to stand this up on a fresh machine or a new Firebase project.
@@ -352,7 +468,6 @@ FIREBASE_PRIVATE_KEY="<pem>"       # REQUIRED — keep the \n escapes; unescaped
 FIREBASE_CLIENT_EMAIL=<email>      # REQUIRED — cert() needs all three
 FIREBASE_PRIVATE_KEY_ID=<id>       # optional, unused by cert()
 FIREBASE_CLIENT_ID=<id>            # optional, unused by cert()
-CLOUDINARY_*                       # legacy, unused — see dead code in Considerations
 ```
 
 All three `FIREBASE_*` required values come from a **service account JSON**
@@ -467,14 +582,24 @@ emitted immediately on `connect` is correctly rejected. Not an app bug — the r
 client waits for state — but any test harness must wait, and must listen for
 `server:error` or the rejection is silent.
 
-**Dead code still present.** `uploadFrameToCloud()` and `updateFrameUrl()` in
-`cloud-sync.ts` have no callers; `uploadFrameToCloud` takes a `jpegBuffer` and
-belongs to the MJPEG design this replaced. They drag in `cloudinary`. Either
-delete them or keep them deliberately as the seed of a cloud-relay path.
+**✅ Fixed — dead code removed.** `uploadFrameToCloud()` and `updateFrameUrl()`
+in `cloud-sync.ts` had no callers — they took a `jpegBuffer` and belonged to the
+MJPEG design WebRTC replaced — and dragged in the `cloudinary` dependency for
+nothing. Both functions and the dependency are gone.
 
 **Admin password is still the default.** `packages/desktop/src/main.js` sets
 `ADMIN_PASSWORD = 'change-me'`. Harmless on a trusted LAN; **must change before
 any public exposure**.
+
+**Building the server pollutes its own test run.** `npm run build` compiles
+`packages/server/src/**/*.test.ts` into `dist/` alongside the compiled source.
+Jest had no ignore pattern for that directory, so it discovered the compiled
+copies too and ran every server suite twice — the duplicates failing on module
+resolution paths that only exist post-build. The failure only appears **after a
+build**, so a `test`-then-`build` order looked fine and `build`-then-`test`
+produced a wall of unrelated-looking red. Fixed with
+`testPathIgnorePatterns: ['/node_modules/', '/dist/']` in
+`packages/server/jest.config.cjs`.
 
 ---
 
@@ -528,27 +653,21 @@ must change before the app is ever exposed directly.
 
 ### 9.6 Smaller ones
 
-- **No automated tests** for the streaming/signalling paths — all verification
-  here was manual browser driving. The score-sync projection in particular
-  (`toPublicScoreboard`) guards a credential leak and would be worth a
-  regression test.
 - **No cleanup of `matches/{courtId}`** — documents persist in Firestore after a
   tournament ends.
 - **Public page shows one court** — no index or multi-court view.
-- **Pause is not reflected on the public page**; the `stream:paused` signal is
-  Socket.io-only, so an internet viewer sees frozen/black video with no
-  explanation.
-- **Dead Cloudinary code** — see Considerations.
 
-### ⚠️ Do not simply tunnel the app to the internet
+**Fixed since this list was written:**
 
-The quickest public URL is `cloudflared`/`ngrok` at port 3000, with zero code
-change — but it publishes **the whole app**, including `/admin` and every mutating
-`/api/*` route, behind a password defaulting to `change-me`. Anyone who finds the
-URL can create and score matches.
-
-The Firebase route is safer by construction: it publishes only the data pushed to
-it and never exposes the local server.
+- ~~No automated tests for the streaming/signalling paths~~ — closed by the
+  skill-driven refactor: client coverage 68.9% → 98.1% statements, server
+  82.5% → 99.6%, streaming/signalling files at or near 100%. See section 5b
+  and 11. `toPublicScoreboard()` in particular now has a test asserting
+  `umpireToken`/`umpireCode` never reach the serialised output.
+- ~~Pause is not reflected on the public page~~ — closed; see section 6c.
+- ~~Dead Cloudinary code~~ — removed from `cloud-sync.ts` along with the
+  `cloudinary` dependency; it had zero importers left after the WebRTC
+  migration replaced the JPEG-frame relay it existed for.
 
 ### ⚠️ Do not simply tunnel the app to the internet
 
@@ -565,19 +684,20 @@ it and never exposes the local server.
 ## 10. What's next
 
 Scope for the POC: **3–5 simultaneous viewers**, which keeps WebRTC mesh viable
-and rules out needing an SFU for now.
+and rules out needing an SFU for now. Firestore signalling, the video panel on
+the public page, and the `.env`/`cwd` fix are all done (sections 6–6c, 7) — what
+remains:
 
-1. **Firestore-based WebRTC signalling.** The phone and the viewer both have
-   internet, so they can exchange offer/answer through Firestore and connect
-   directly — no port forwarding, no exposing the laptop. Requires the broadcaster
-   to speak Firestore signalling alongside Socket.io.
-2. **Video panel on the public page**, reusing the score layout already deployed.
-3. **Try STUN-only first**, then test from a phone on **cellular** (not office
-   wifi). That is the honest way to find out whether TURN is actually needed
-   before paying for relay bandwidth. Cloudflare and Metered both have free tiers
-   if it is.
-4. **Fix the `.env`/`cwd` gap** (section 7) so this works from the packaged app.
-5. **Change `ADMIN_PASSWORD`** before anything is publicly reachable.
+1. **Test from a phone on cellular, not office wifi.** Everything so far is
+   verified on one LAN with STUN only (section 9.1). Carrier CGNAT is exactly
+   where STUN-alone fails, and that is the most plausible real internet viewer.
+   Cloudflare and Metered both have free TURN tiers if it turns out to be needed.
+2. **Change `ADMIN_PASSWORD`** before anything is publicly reachable.
+3. **Try full screen / Add to Home Screen / wake lock on a real iPhone and a
+   real Android phone** (section 6c). The unit tests mock every platform API
+   involved — `requestFullscreen`, `webkitEnterFullscreen`, `wakeLock` — so the
+   actual platform behaviour, especially the iPhone fallback path, is still
+   unverified outside a browser.
 
 If the audience ever grows past a handful, move to an SFU (LiveKit Cloud, Daily,
 Cloudflare Calls): the phone publishes once and the server fans out. Avoid
@@ -602,11 +722,29 @@ cd packages/desktop && env -u ELECTRON_RUN_AS_NODE npx electron .
 cd packages/server && npx tsx src/index.ts
 ```
 
+### Test coverage
+
+```bash
+npm test   # jest --coverage in every workspace
+```
+
+| Workspace | Tests | Statements | Branches |
+| --------- | ----- | ---------- | -------- |
+| `client`  | 319   | 98.1%      | 97.8%    |
+| `server`  | 142   | 99.6%      | 99.0%    |
+| `shared`  | 90    | 100%       | 100%     |
+
+Up from 186/112/90 (68.9%/82.5% statements on client/server) before the
+skill-driven refactor — see section 5b. Every streaming and signalling file
+(`webrtc-stream.ts`, `firestore-signal.ts`, `sockets/stream.ts`,
+`cloud-sync.ts`, both Stream screens, `useFullscreen`, `useWakeLock`) is now at
+or near 100%, closing the gap **HANDOFF.md** used to call out explicitly.
+
 ### Environment (`packages/server/.env`, gitignored)
 
 `FIREBASE_PROJECT_ID`, `FIREBASE_PRIVATE_KEY`, `FIREBASE_CLIENT_EMAIL` (all three
-required by `cert()`), plus `FIREBASE_PRIVATE_KEY_ID`, `FIREBASE_CLIENT_ID` and
-the `CLOUDINARY_*` keys. Never commit these.
+required by `cert()`), plus optional `FIREBASE_PRIVATE_KEY_ID`,
+`FIREBASE_CLIENT_ID`. Never commit these.
 
 ### Firestore
 

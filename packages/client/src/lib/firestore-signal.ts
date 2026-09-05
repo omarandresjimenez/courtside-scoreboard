@@ -77,6 +77,22 @@ function appFor(config: FirestoreSignalConfig): FirebaseApp {
 export interface InternetBroadcastHandle {
   stop: () => void;
   viewerCount: () => number;
+  setPaused: (paused: boolean) => void;
+}
+
+/**
+ * Everything a single viewer owns, so it can all be released together.
+ *
+ * `release` exists because the per-viewer Firestore listeners used to be
+ * fire-and-forget: `onSnapshot` returns an unsubscribe function, and both of
+ * the ones below were being discarded. Closing the peer connection does not
+ * detach a Firestore listener, so every viewer that came and went left two
+ * live snapshot listeners behind for the lifetime of the broadcast — each one
+ * still billing reads against a document nobody was watching any more.
+ */
+interface PeerSession {
+  pc: RTCPeerConnection;
+  release: () => void;
 }
 
 /**
@@ -92,25 +108,41 @@ export function broadcastToInternet(
   const db: Firestore = getFirestore(appFor(config));
   const streamDoc = doc(db, 'streams', courtId);
   const viewersCol = collection(db, 'streams', courtId, 'viewers');
-  const peers = new Map<string, RTCPeerConnection>();
+  const peers = new Map<string, PeerSession>();
   let stopped = false;
 
+  // `paused` is reset on both start and stop so a broadcast never inherits a
+  // stale paused flag from a previous session on this court — the same reason
+  // the Socket.io path clears pausedByCourtId when a broadcaster connects.
   const announce = (live: boolean) =>
-    setDoc(streamDoc, { live, updatedAt: serverTimestamp() }, { merge: true }).catch(() => {
-      // Presence is a convenience for the viewer's placeholder text, not a
-      // correctness requirement — a failure here must not stop the broadcast.
-    });
+    setDoc(streamDoc, { live, paused: false, updatedAt: serverTimestamp() }, { merge: true }).catch(
+      () => {
+        // Presence is a convenience for the viewer's placeholder text, not a
+        // correctness requirement — a failure here must not stop the broadcast.
+      },
+    );
   void announce(true);
 
   function report() {
     onCountChange?.(peers.size);
   }
 
-  /** Drop a peer and its signalling doc, freeing the slot it held. */
-  function dropViewer(viewerId: string): void {
-    peers.get(viewerId)?.close();
+  /**
+   * Close a peer and detach every listener and timer it owns, without
+   * touching Firestore. Safe to call for an unknown id.
+   */
+  function releasePeer(viewerId: string): void {
+    const session = peers.get(viewerId);
+    if (!session) return;
+    session.release();
+    session.pc.close();
     peers.delete(viewerId);
     report();
+  }
+
+  /** Release a peer and also clear its signalling doc, freeing the slot it held. */
+  function dropViewer(viewerId: string): void {
+    releasePeer(viewerId);
     void deleteDoc(doc(viewersCol, viewerId)).catch(() => {});
   }
 
@@ -126,12 +158,23 @@ export function broadcastToInternet(
     if (peers.size >= MAX_INTERNET_VIEWERS) return;
 
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    peers.set(viewerId, pc);
+
+    // Collected as they are created, so a viewer's teardown is one call and
+    // cannot silently miss a listener added later.
+    const teardown: Array<() => void> = [];
+    peers.set(viewerId, {
+      pc,
+      release: () => {
+        teardown.forEach((detach) => detach());
+        teardown.length = 0;
+      },
+    });
     report();
 
     const connectTimer = setTimeout(() => {
       if (pc.connectionState !== 'connected') dropViewer(viewerId);
     }, CONNECT_TIMEOUT_MS);
+    teardown.push(() => clearTimeout(connectTimer));
 
     stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
@@ -145,13 +188,11 @@ export function broadcastToInternet(
     };
 
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'connected') clearTimeout(connectTimer);
       if (
         pc.connectionState === 'failed' ||
         pc.connectionState === 'closed' ||
         pc.connectionState === 'disconnected'
       ) {
-        clearTimeout(connectTimer);
         dropViewer(viewerId);
       }
     };
@@ -160,22 +201,34 @@ export function broadcastToInternet(
     await pc.setLocalDescription(offer);
     await setDoc(viewerDoc, { offer: { type: offer.type, sdp: offer.sdp } }, { merge: true });
 
-    // The viewer's answer, then its ICE. Both arrive asynchronously.
-    onSnapshot(viewerDoc, (snap) => {
-      const answer = snap.data()?.answer;
-      if (answer && !pc.currentRemoteDescription) {
-        void pc.setRemoteDescription(new RTCSessionDescription(answer)).catch(() => {});
-      }
-    });
+    // stop() can land during any of the awaits above. Registering listeners
+    // after that point would attach them to a session nothing will ever tear
+    // down again — the leak this whole structure exists to prevent.
+    if (stopped || !peers.has(viewerId)) {
+      releasePeer(viewerId);
+      return;
+    }
 
-    onSnapshot(answerCandidates, (snap) => {
-      snap.docChanges().forEach((change) => {
-        if (change.type !== 'added') return;
-        void pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {
-          // Candidates routinely lose the race against a closing connection.
+    // The viewer's answer, then its ICE. Both arrive asynchronously.
+    teardown.push(
+      onSnapshot(viewerDoc, (snap) => {
+        const answer = snap.data()?.answer;
+        if (answer && !pc.currentRemoteDescription) {
+          void pc.setRemoteDescription(new RTCSessionDescription(answer)).catch(() => {});
+        }
+      }),
+    );
+
+    teardown.push(
+      onSnapshot(answerCandidates, (snap) => {
+        snap.docChanges().forEach((change) => {
+          if (change.type !== 'added') return;
+          void pc.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {
+            // Candidates routinely lose the race against a closing connection.
+          });
         });
-      });
-    });
+      }),
+    );
   }
 
   // Anything already in this collection predates the broadcast that is only
@@ -196,9 +249,7 @@ export function broadcastToInternet(
           void connectViewer(change.doc.id, change.doc.data()?.requestedAt as number | undefined);
         }
         if (change.type === 'removed') {
-          peers.get(change.doc.id)?.close();
-          peers.delete(change.doc.id);
-          report();
+          releasePeer(change.doc.id);
         }
       });
     });
@@ -208,7 +259,13 @@ export function broadcastToInternet(
     stop() {
       stopped = true;
       unsubscribeViewers();
-      peers.forEach((pc) => pc.close());
+      // release() before close() so the pending connect timer cannot fire
+      // after teardown and call back into onCountChange — which, on the
+      // broadcast screen, is a React setState on an unmounted component.
+      peers.forEach((session) => {
+        session.release();
+        session.pc.close();
+      });
       peers.clear();
       report();
       void announce(false);
@@ -220,5 +277,23 @@ export function broadcastToInternet(
         .catch(() => {});
     },
     viewerCount: () => peers.size,
+
+    /**
+     * Tell internet viewers the camera is paused.
+     *
+     * Necessary for the same reason the LAN path emits STREAM_EVENTS.PAUSED:
+     * disabling a video track keeps the peer connection up and simply sends
+     * black frames, so a viewer sees a dead picture that is indistinguishable
+     * from a broken connection on their own end. Carried in the stream
+     * document rather than per-viewer, since it is one fact about the court
+     * that every viewer needs.
+     */
+    setPaused(paused: boolean) {
+      void setDoc(streamDoc, { paused, updatedAt: serverTimestamp() }, { merge: true }).catch(
+        () => {
+          // A dropped pause notice is cosmetic; never break the broadcast.
+        },
+      );
+    },
   };
 }

@@ -2,8 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- viewport-fit=cover plus the safe-area insets below: installed to an
+         iPhone home screen this page runs under the notch and home indicator. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0e1a" />
     <title>Courtside — Live Score</title>
+
+    <!-- Served over a real certificate here (unlike the LAN pages), so this is
+         installable on Android as well as iOS — opening with no address bar. -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Courtside Live" />
+    <link rel="apple-touch-icon" href="icon-192.png" />
     <link
       rel="icon"
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🏸</text></svg>"
@@ -76,7 +88,7 @@
            comfortable size whether the stage is a phone strip or a full
            16:9 desktop window. */
         z-index: 5;
-        opacity: 0.40;
+        opacity: 0.4;
       }
       .bug-head {
         display: flex;
@@ -221,12 +233,123 @@
       .dot.stale {
         background: var(--text-dim);
       }
+
+      /* Shown over the picture while the court has the camera paused. A paused
+         track keeps sending black frames, so without this the viewer sees a
+         dead screen and assumes their own connection broke. */
+      .pausedmsg {
+        position: absolute;
+        inset: 0;
+        z-index: 3;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
+        padding: 1rem;
+        text-align: center;
+        pointer-events: none;
+        background: rgba(10, 14, 26, 0.55);
+      }
+      .pausedmsg[hidden] {
+        display: none !important;
+      }
+      .pausedmsg strong {
+        color: #fbbf24;
+        font-size: 1.15rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .pausedmsg span {
+        max-width: 32rem;
+        color: var(--text-dim);
+        font-size: 0.95rem;
+        line-height: 1.4;
+      }
+
+      /* Full-screen control, overlaid bottom-right of the video. */
+      .fsbtn {
+        position: absolute;
+        right: 0.75rem;
+        bottom: 0.75rem;
+        z-index: 4;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        /* 44px: the smallest reliably tappable target on a phone. */
+        min-width: 44px;
+        min-height: 44px;
+        padding: 0;
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        background: rgba(10, 14, 26, 0.55);
+        color: var(--text);
+        font-size: 1.35rem;
+        line-height: 1;
+        cursor: pointer;
+        backdrop-filter: blur(4px);
+      }
+      .fsbtn:hover,
+      .fsbtn:focus-visible {
+        background: rgba(10, 14, 26, 0.8);
+      }
+      /* Hidden where the browser has no fullscreen route at all. */
+      .fsbtn[hidden] {
+        display: none !important;
+      }
+
+      /* As the fullscreen element the stage becomes the viewport; without an
+         explicit size it collapses to the video's intrinsic height. */
+      .stage:fullscreen {
+        width: 100%;
+        height: 100%;
+        background: #000;
+      }
+      .stage:fullscreen #video {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+
+      @supports (padding: env(safe-area-inset-top)) {
+        body {
+          padding-top: env(safe-area-inset-top);
+          padding-bottom: env(safe-area-inset-bottom);
+          padding-left: env(safe-area-inset-left);
+          padding-right: env(safe-area-inset-right);
+        }
+        .fsbtn {
+          bottom: calc(0.75rem + env(safe-area-inset-bottom));
+          right: calc(0.75rem + env(safe-area-inset-right));
+        }
+      }
     </style>
   </head>
   <body>
     <div class="stage" id="stage" hidden>
       <video id="video" autoplay playsinline muted></video>
       <div class="vidmsg" id="vidmsg">Waiting for the court to start the camera…</div>
+      <button
+        type="button"
+        class="fsbtn"
+        id="fsbtn"
+        aria-label="Full screen"
+        title="Full screen"
+        hidden
+      >
+        ⤢
+      </button>
+
+      <!-- Distinct from .vidmsg, which CSS hides once the stream is playing.
+           A pause happens *while* playing, so it needs its own layer. -->
+      <div class="pausedmsg" id="pausedmsg" role="status" hidden>
+        <strong>Camera paused</strong>
+        <span
+          >Nothing is wrong with your connection — the court has paused the camera. Video resumes
+          automatically.</span
+        >
+      </div>
 
       <!-- Broadcast-style score bug, over the video in the top-left. -->
       <div class="scorebug" id="board" hidden>
@@ -319,10 +442,81 @@
        * stays stuck at "connecting" on mobile data, symmetric NAT is why, and
        * TURN is the fix.
        */
+      /**
+       * Full-screen toggle for the stage.
+       *
+       * iPhone Safari has no Element.requestFullscreen() at all — only native
+       * video fullscreen — so the video element is the fallback there. On
+       * that path the page never enters fullscreen, so no fullscreenchange
+       * fires and the label is left alone; iOS draws its own chrome.
+       */
+      function wireFullscreen(stage, video) {
+        const btn = $('fsbtn');
+        const canFullscreenPage = !!(
+          document.fullscreenEnabled || document.webkitFullscreenEnabled
+        );
+        const canFullscreenVideo = typeof video.webkitEnterFullscreen === 'function';
+        if (!canFullscreenPage && !canFullscreenVideo) return;
+        btn.hidden = false;
+
+        const current = () => document.fullscreenElement || document.webkitFullscreenElement;
+
+        btn.addEventListener('click', () => {
+          if (current()) {
+            (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+            return;
+          }
+          if (stage.requestFullscreen) {
+            stage.requestFullscreen().catch((e) => console.warn('fullscreen refused:', e));
+          } else if (stage.webkitRequestFullscreen) {
+            stage.webkitRequestFullscreen();
+          } else if (canFullscreenVideo) {
+            video.webkitEnterFullscreen();
+          }
+        });
+
+        const sync = () => {
+          const on = !!current();
+          btn.textContent = on ? '⤡' : '⤢';
+          const label = on ? 'Exit full screen' : 'Full screen';
+          btn.setAttribute('aria-label', label);
+          btn.title = label;
+        };
+        document.addEventListener('fullscreenchange', sync);
+        document.addEventListener('webkitfullscreenchange', sync);
+      }
+
+      /**
+       * Keep the screen awake while watching, so a phone propped up to follow
+       * a match doesn't dim mid-rally. Best-effort: the browser drops the lock
+       * whenever the tab is backgrounded and never restores it by itself.
+       */
+      function keepScreenAwake() {
+        if (!('wakeLock' in navigator)) return;
+        let sentinel = null;
+        const acquire = () => {
+          navigator.wakeLock
+            .request('screen')
+            .then((s) => {
+              sentinel = s;
+            })
+            .catch((e) => console.warn('wake lock unavailable:', e));
+        };
+        acquire();
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') acquire();
+        });
+        addEventListener('pagehide', () => {
+          sentinel?.release().catch(() => {});
+        });
+      }
+
       async function watchVideo(db, courtId) {
         const stage = $('stage');
         const video = $('video');
         stage.hidden = false;
+        wireFullscreen(stage, video);
+        keepScreenAwake();
 
         const streamDoc = doc(db, 'streams', courtId);
         // Random per-tab id: two people watching must not share an entry, or
@@ -389,7 +583,14 @@
         // Tell the viewer whether anyone is even broadcasting, so "no video"
         // reads as a fact about the court rather than a broken page.
         onSnapshot(streamDoc, (snap) => {
-          if (!snap.exists() || !snap.data()?.live) {
+          const data = snap.exists() ? snap.data() : null;
+          const live = !!data?.live;
+
+          // Only meaningful while the court is actually broadcasting; a stale
+          // paused flag on a dead stream would be misleading.
+          $('pausedmsg').hidden = !(live && data?.paused);
+
+          if (!live) {
             if (!stage.classList.contains('playing')) {
               setVideoMsg('Waiting for the court to start the camera…');
             }

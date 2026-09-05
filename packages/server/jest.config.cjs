@@ -1,6 +1,11 @@
 /** @type {import('jest').Config} */
 module.exports = {
   testEnvironment: 'node',
+  // `npm run build` compiles src/**/*.test.ts into dist/, and without this
+  // jest then discovers those compiled copies and runs every suite twice —
+  // the duplicates failing on module resolution. Test after a build and the
+  // result was a wall of red that had nothing to do with the code.
+  testPathIgnorePatterns: ['/node_modules/', '/dist/'],
   transform: {
     '^.+\\.tsx?$': [
       'ts-jest',

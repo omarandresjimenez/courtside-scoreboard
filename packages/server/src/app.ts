@@ -39,7 +39,7 @@ export interface CreateAppOptions {
  * still resolves correctly. See "Running this for a real match" in the README.
  */
 export function createApp(options: CreateAppOptions = {}): CourtsideApp {
-  // Initialize cloud services (Firebase, Cloudinary) if credentials available
+  // Initialize cloud services (Firebase) if credentials are available
   initializeCloudServices();
 
   const app = express();

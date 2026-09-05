@@ -424,6 +424,13 @@ logs a warning and disables itself, and the Socket.io signalling path keeps
 serving venue viewers. That was a deliberate constraint, not a happy accident —
 the venue network is the one that has to work.
 
+**A later pass added full-screen support, Add to Home Screen, and a screen wake
+lock** for the broadcaster and viewer phones, plus full unit coverage for the
+streaming code that previously had none — three real bugs surfaced doing that
+(a Firestore listener leak, a reconnecting broadcaster tearing down its own
+live stream, a StrictMode double pause-emit caught before it shipped). See
+STREAMING_UPGRADE.md sections 5b, 6c and 11.
+
 **Touch points in existing code, worth knowing about:**
 
 - `sockets/index.ts` — one added call at the single broadcast choke point pushes
@@ -436,8 +443,15 @@ the venue network is the one that has to work.
 - `firestore.rules` — scores are world-readable and **client-write-denied**;
   the signalling subtree is open by necessity. `toPublicScoreboard()` is an
   allow-list keeping `umpireToken` out of public documents.
+- `sockets/stream.ts` — the broadcaster's `disconnect` handler now checks it is
+  still the _current_ broadcaster for the court before announcing the stream
+  over, so a stale socket timing out after a reconnect can't kill a live one.
+- `manifest.webmanifest` / Apple meta tags (`packages/client/index.html`,
+  `public-viewer/index.html`) — installable-app support. The public viewer,
+  served over a real cert, installs fully on both platforms; the LAN pages,
+  served over the desktop app's self-signed cert, only get it on iPhone.
 
-**The two most useful lessons**, both the hard way:
+**The most useful lessons**, both the hard way:
 
 1. **Don't verify playback with `--autoplay-policy=no-user-gesture-required`.**
    It suppresses the exact failure real users hit; a black-screen bug was
@@ -446,6 +460,14 @@ the venue network is the one that has to work.
    a crash or a force-quit — so abandoned entries accumulated and silently
    consumed every connection slot. Anything holding per-client state in Firestore
    needs a TTL, not just a tidy-up handler.
+3. **Closing an `RTCPeerConnection` does not detach a Firestore `onSnapshot`
+   listener.** Every discarded unsubscribe function from a since-closed peer was
+   a permanent, still-billing listener. Track and call every unsubscribe
+   explicitly — see `firestore-signal.ts`'s `PeerSession`.
+4. **`npm run build` compiles the server's `*.test.ts` files into `dist/` too**,
+   and Jest with no `dist/` ignore pattern discovers and re-runs them, producing
+   a wall of failures that have nothing to do with the code. Build-then-test
+   order matters until `testPathIgnorePatterns` excludes it.
 
 ## Desktop app (`packages/desktop/`) — Electron wrapper
 
@@ -724,21 +746,30 @@ npm run typecheck     # tsc --noEmit across every package
 npm test              # Jest --coverage in every package
 ```
 
-388 tests total across shared/server/client (90/112/186), 100% coverage
-on every metric except one intentionally-uncovered, documented branch in
-`AdminDashboard.tsx` (the not-yet-built "custom" scoring preset — see the
-comment at its call site) and one branch in `matches.ts` documented as an
-istanbul coverage-merge artifact in `packages/server/jest.config.cjs`.
+551 tests total across shared/server/client (90/142/319). Shared is 100%
+coverage on every metric; server is 99.6% statements / 99.0% branches; client
+is 98.1% statements / 97.8% branches — the remaining gaps are one
+intentionally-uncovered, documented branch in `AdminDashboard.tsx` (the
+not-yet-built "custom" scoring preset — see the comment at its call site), one
+branch in `matches.ts` documented as an istanbul coverage-merge artifact in
+`packages/server/jest.config.cjs`, and a handful of no-op `.catch(() => {})`
+handlers in `firestore-signal.ts` and `AdminDashboard.tsx`.
 
-⚠️ **The video-streaming and cloud-sync code is excluded from that claim.**
-`webrtc-stream.ts`, `firestore-signal.ts`, `sockets/stream.ts`,
-`integrations/cloud-sync.ts` and the two Stream screens have **no automated
-tests** — they were verified by driving real browsers (see
-STREAMING_UPGRADE.md), which is how every bug in them was actually found, but
-the coverage thresholds no longer describe the whole repo. `toPublicScoreboard()`
-in `cloud-sync.ts` is the highest-value gap: it is the allow-list that keeps the
-umpire's write token out of a world-readable Firestore document, and a
-regression there would leak credentials silently.
+✅ **The video-streaming and cloud-sync code, previously excluded from that
+claim, now has full unit coverage.** `webrtc-stream.ts`, `firestore-signal.ts`,
+`sockets/stream.ts`, `integrations/cloud-sync.ts`, both Stream screens, and the
+newer `useFullscreen.ts`/`useWakeLock.ts` are all at or near 100% (see
+STREAMING_UPGRADE.md section 5b and 11 for the before/after numbers and the
+three real bugs the new tests found — a Firestore listener leak, a
+reconnecting broadcaster tearing down its own live stream, and a StrictMode
+double-emit caught before it shipped). `toPublicScoreboard()` in
+`cloud-sync.ts` — the allow-list that keeps the umpire's write token out of a
+world-readable Firestore document — now has a test asserting the token never
+reaches the serialised output. Manual browser driving (STREAMING_UPGRADE.md)
+remains how the _first four_ streaming bugs were found and is still how the
+actual WebRTC handshake gets verified — these unit tests mock
+`RTCPeerConnection` and `onSnapshot`, they don't replace a real phone-to-viewer
+test.
 
 The
 `packages/desktop` Electron app has **no automated tests** — it was
