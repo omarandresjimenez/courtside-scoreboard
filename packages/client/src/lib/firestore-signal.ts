@@ -11,6 +11,7 @@ import {
   setDoc,
   type Firestore,
 } from 'firebase/firestore';
+import { INTERNET_ICE_SERVERS, logSelectedCandidatePair } from './ice-config.js';
 
 /**
  * WebRTC signalling over Firestore, for viewers watching from the internet.
@@ -32,8 +33,6 @@ import {
  *   streams/{courtId}/viewers/{viewerId}/offerCandidates/*   (broadcaster ICE)
  *   streams/{courtId}/viewers/{viewerId}/answerCandidates/*  (viewer ICE)
  */
-
-const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
 
 /**
  * Hard cap on internet peers. Each one costs the phone a *separate* encoded
@@ -104,6 +103,12 @@ export function broadcastToInternet(
   courtId: string,
   stream: MediaStream,
   onCountChange?: (count: number) => void,
+  /**
+   * ICE servers for the peers this broadcast creates. Defaults to the static
+   * STUN list; the caller passes a relay-bearing list from
+   * fetchInternetIceServers() when the server has TURN configured.
+   */
+  iceServers: RTCIceServer[] = INTERNET_ICE_SERVERS,
 ): InternetBroadcastHandle {
   const db: Firestore = getFirestore(appFor(config));
   const streamDoc = doc(db, 'streams', courtId);
@@ -157,7 +162,7 @@ export function broadcastToInternet(
     }
     if (peers.size >= MAX_INTERNET_VIEWERS) return;
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({ iceServers });
 
     // Collected as they are created, so a viewer's teardown is one call and
     // cannot silently miss a listener added later.
@@ -188,6 +193,9 @@ export function broadcastToInternet(
     };
 
     pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') {
+        logSelectedCandidatePair(pc, `broadcaster->${viewerId}`);
+      }
       if (
         pc.connectionState === 'failed' ||
         pc.connectionState === 'closed' ||

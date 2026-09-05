@@ -14,9 +14,16 @@ const mockStartBroadcasting = jest.fn(() => lanHandle);
 jest.mock('./webrtc-stream.js', () => ({ startBroadcasting: () => mockStartBroadcasting() }));
 
 const internetHandle = { stop: jest.fn(), viewerCount: () => 0, setPaused: jest.fn() };
+const RELAY_SERVERS = [{ urls: 'turn:turn.cloudflare.com:3478', username: 'u', credential: 'c' }];
+const mockFetchIce = jest.fn(async () => RELAY_SERVERS);
 const mockBroadcastToInternet = jest.fn(
-  (_config: unknown, _courtId: string, _stream: MediaStream, _onCount?: (n: number) => void) =>
-    internetHandle,
+  (
+    _config: unknown,
+    _courtId: string,
+    _stream: MediaStream,
+    _onCount?: (n: number) => void,
+    _iceServers?: unknown,
+  ) => internetHandle,
 );
 jest.mock('./firestore-signal.js', () => ({
   broadcastToInternet: (...args: unknown[]) =>
@@ -25,7 +32,12 @@ jest.mock('./firestore-signal.js', () => ({
       args[1] as string,
       args[2] as MediaStream,
       args[3] as ((n: number) => void) | undefined,
+      args[4],
     ),
+}));
+
+jest.mock('./turn-credentials.js', () => ({
+  fetchInternetIceServers: () => mockFetchIce(),
 }));
 
 import { useCameraBroadcast } from './useCameraBroadcast.js';
@@ -33,6 +45,7 @@ import { useCameraBroadcast } from './useCameraBroadcast.js';
 beforeEach(() => {
   jest.clearAllMocks();
   mockRequestCameraStream.mockResolvedValue(stream);
+  mockFetchIce.mockResolvedValue(RELAY_SERVERS);
 });
 
 async function started(courtId = 'court1') {
@@ -57,6 +70,15 @@ describe('useCameraBroadcast', () => {
     expect(result.current.stream).toBe(stream);
     expect(mockStartBroadcasting).toHaveBeenCalled();
     expect(mockBroadcastToInternet).toHaveBeenCalled();
+  });
+
+  it('passes the fetched relay into the internet broadcast', async () => {
+    await started();
+
+    // A peer built without a relay cannot gain one later without
+    // renegotiating, so the credentials must be in hand before broadcasting.
+    expect(mockFetchIce).toHaveBeenCalled();
+    expect(mockBroadcastToInternet.mock.calls[0]![4]).toEqual(RELAY_SERVERS);
   });
 
   it('stays live on LAN when the internet path throws', async () => {

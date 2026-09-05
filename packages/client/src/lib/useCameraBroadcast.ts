@@ -3,6 +3,7 @@ import { cameraErrorMessage, requestCameraStream } from './camera-stream.js';
 import { startBroadcasting, type BroadcasterHandle } from './webrtc-stream.js';
 import { broadcastToInternet, type InternetBroadcastHandle } from './firestore-signal.js';
 import { firebaseConfig } from './firebase-config.js';
+import { fetchInternetIceServers } from './turn-credentials.js';
 
 export type BroadcastStatus = 'idle' | 'starting' | 'live' | 'paused' | 'error';
 
@@ -63,11 +64,17 @@ export function useCameraBroadcast(courtId: string | undefined): CameraBroadcast
       // has no internet uplink, which is the situation this app is built to
       // survive. A failure here must not take the LAN broadcast down with it.
       try {
+        // Awaited before broadcasting so the first viewer already has a relay
+        // to work with; a peer created without one cannot gain it later
+        // without renegotiating. Resolves to plain STUN if no relay exists,
+        // so this never blocks the broadcast.
+        const iceServers = await fetchInternetIceServers();
         internetRef.current = broadcastToInternet(
           firebaseConfig,
           courtId,
           cameraStream,
           setInternetViewers,
+          iceServers,
         );
       } catch (err) {
         console.warn('Internet broadcast unavailable (LAN streaming unaffected):', err);

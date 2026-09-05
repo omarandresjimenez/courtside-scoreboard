@@ -450,6 +450,107 @@ indistinguishable from their own connection breaking. See bug note in 5b.
 
 ---
 
+## 6d. TURN relay & on-page connection diagnostics
+
+### The failure this solves
+
+Internet viewers on two different networks both reported _"Could not reach the
+camera"_. That string is only reachable from `connectionState === 'failed'`,
+which is diagnostic in itself: signalling had already succeeded (an offer was
+received and answered) and **ICE** was what failed. STUN reports a peer its own
+public address but cannot forward packets, so when either side is behind
+symmetric NAT or carrier CGNAT — normal on mobile data — there is simply no
+direct path. A relay is the only fix.
+
+### ⚠️ The free public TURN servers are dead — verify before trusting one
+
+The obvious fix, OpenRelay's shared `openrelayproject` credentials, **does not
+work**. The host resolves and accepts TCP, but the allocation is refused:
+
+```
+turn:openrelay.metered.ca:80?transport=udp  -> code=400 TURN allocate error
+turn:openrelay.metered.ca:443?transport=udp -> code=400 TURN allocate error
+relay candidates gathered: 0
+```
+
+Measured by driving headless Chrome through a real ICE gather. STUN worked in
+the same run (`srflx: 1`), so the probe was sound. Configuring those credentials
+would have _looked_ like a fix and changed nothing — worth repeating for any
+future relay: **confirm a `relay` candidate is actually gathered**, never assume
+a reachable host means a working relay.
+
+### What shipped: Cloudflare Realtime TURN, minted server-side
+
+| Piece                                      | File                                                                             |
+| ------------------------------------------ | -------------------------------------------------------------------------------- |
+| Mints + caches credentials from Cloudflare | `packages/server/src/integrations/turn-credentials.ts`                           |
+| Serves them to the broadcaster             | `packages/server/src/routes/turn.ts` (`GET /api/turn-credentials`)               |
+| Fetches before broadcasting                | `packages/client/src/lib/turn-credentials.ts`                                    |
+| Static STUN, split by topology             | `packages/client/src/lib/ice-config.ts` (+ `public-viewer/ice-config.js` mirror) |
+
+**The TURN key never reaches a browser.** It is a long-term secret that mints
+unlimited credentials, so the server holds it and hands out only short-lived
+(24h TTL) username/credential pairs. Credentials are cached for 23h — a 1h
+refresh margin, so a match never starts with a pair about to lapse.
+
+**Only the broadcaster gets a relay.** In ICE, one side offering a relay
+candidate is enough for the other to connect through it, so no credential ever
+goes near the static public viewer page. See 9.1 for the one case this does not
+cover.
+
+**Everything degrades to today's behaviour.** No credentials, or Cloudflare
+unreachable, and `getTurnIceServers()` returns `[]`, the endpoint answers
+`{"iceServers":[],"configured":false}`, and the client falls back to STUN. A
+missing relay must never stop a broadcast from starting.
+
+Verified end of the chain: the endpoint mints 2 entries (a STUN pair and a TURN
+entry with 6 URLs spanning UDP/TCP/TLS on ports 3478, 53, 80, 443), and a real
+Chrome ICE gather against them produced **8 relay candidates**. Notably every
+**UDP** path failed on the test network (`701 host lookup`) while the TCP/TLS
+ones succeeded — exactly what Cloudflare's port-443/80/53 variants exist for,
+and something OpenRelay had no answer to.
+
+`ice-config.ts` deliberately splits the two topologies: `LAN_ICE_SERVERS` is
+STUN-only (that path must survive a venue with **no uplink**, where listing an
+unreachable relay only delays gathering), `INTERNET_ICE_SERVERS` is the one the
+relay is appended to.
+
+### On-page connection diagnostics
+
+The public viewer runs on devices nobody can attach a debugger to — someone
+else's phone, on someone else's network, which is exactly where WebRTC breaks.
+So the log is **on the page**, not in a console:
+
+```
+https://courtside-scoreboard-86e96.web.app/?court=<courtId>&debug=1
+```
+
+It reveals itself automatically on failure even without `?debug=1`, and has a
+Copy button so a log can be pasted out of a phone. It records the environment
+(including wifi vs cellular via `navigator.connection`), whether Firestore
+reads and signalling writes were permitted, every handshake step, ICE candidate
+types gathered by kind, per-server ICE errors with their codes, and the winning
+candidate pair — including whether a **relay** carried it, which is the only way
+to confirm TURN is doing anything rather than merely being configured.
+
+### Score bug stays visible in full screen
+
+The score overlay is a child of `.stage`, so element full screen always kept it.
+iPhone Safari was the exception: it has no `Element.requestFullscreen()`, and
+the old fallback called `video.webkitEnterFullscreen()` — which hands the page
+to the native iOS player and shows the video **alone**, dropping every overlay
+including the score.
+
+That fallback is gone. Where element full screen is unavailable the stage now
+fills the viewport manually (`position: fixed; inset: 0`, `100dvh` — `vh` on
+mobile Safari counts the area behind the browser chrome and pushes the bottom of
+the video off-screen). Overlays survive on every platform; the score bug also
+scales up and honours the safe-area insets, since a full screen is read from
+further away. On iPhone this cannot hide Safari's own chrome — Add to Home
+Screen (section 6c) is what does that.
+
+---
+
 ## 7. Configuration required
 
 Everything needed to stand this up on a fresh machine or a new Firebase project.
@@ -468,7 +569,14 @@ FIREBASE_PRIVATE_KEY="<pem>"       # REQUIRED — keep the \n escapes; unescaped
 FIREBASE_CLIENT_EMAIL=<email>      # REQUIRED — cert() needs all three
 FIREBASE_PRIVATE_KEY_ID=<id>       # optional, unused by cert()
 FIREBASE_CLIENT_ID=<id>            # optional, unused by cert()
+
+CLOUDFLARE_TURN_KEY_ID=<id>        # optional — enables the TURN relay
+CLOUDFLARE_TURN_API_TOKEN=<token>  # optional — both required together
 ```
+
+Without the `CLOUDFLARE_TURN_*` pair the app behaves exactly as it did before
+the relay existed: STUN only, which works whenever at least one side has a cone
+NAT. With it, viewers behind symmetric NAT and carrier CGNAT can connect too.
 
 All three `FIREBASE_*` required values come from a **service account JSON**
 (Firebase console → Project settings → Service accounts → Generate new private
@@ -499,6 +607,31 @@ Four steps, and **they fail differently**, which cost real time to untangle:
 
    These values are public by design (they identify the project, they authorise
    nothing); access is governed entirely by `firestore.rules`.
+
+### 7.2b Cloudflare TURN — one-time setup
+
+Needed only for internet viewers on restricted networks (see 6d). LAN streaming
+never touches it.
+
+1. Sign up at <https://dash.cloudflare.com/sign-up>. **No domain required** —
+   skip the "add a site" onboarding entirely.
+2. Dashboard → **Realtime** (called _Calls_ until recently) → **TURN** →
+   **Create TURN key**.
+3. Put the two values in `packages/server/.env` as `CLOUDFLARE_TURN_KEY_ID` and
+   `CLOUDFLARE_TURN_API_TOKEN`, then restart the desktop app.
+4. Confirm: `curl -s http://localhost:3000/api/turn-credentials` should report
+   `"configured":true` with `turn:turn.cloudflare.com` URLs.
+
+**Pricing:** 1,000 GB/month free, shared across TURN and SFU, then $0.05/GB;
+only egress is billed. At ~2.6 Mbps a relayed viewer costs roughly **1.2
+GB/hour**, so a 4-hour tournament with 3 relayed viewers is ~14 GB — comfortably
+inside the free tier. Note that only viewers who _need_ a relay consume it;
+anyone who can connect directly costs nothing.
+
+The API token is a long-term secret that mints unlimited credentials. It lives
+in `.env` (gitignored), never in a client bundle, and is never written to a log
+— including when Cloudflare echoes the request back in an error body, which
+there is a regression test for.
 
 ### 7.3 Repo-level Firebase config
 
@@ -607,17 +740,26 @@ produced a wall of unrelated-looking red. Fixed with
 
 Ordered by how likely each is to bite during a real tournament.
 
-### 9.1 Untested: a viewer on mobile data
+### 9.1 ⚠️ Partly closed: viewers on restricted networks
 
-Everything so far has been verified on one LAN with **STUN only**. Carrier CGNAT
-and symmetric NAT are exactly where STUN-alone fails, and that is the most
-plausible real-world viewer. **This is the next thing to test, and it needs a
-phone on cellular, not office wifi.**
+This gap predicted the failure that then happened for real: internet viewers on
+both a phone and a second laptop reported _"Could not reach the camera"_. That
+message comes only from `connectionState === 'failed'`, which means signalling
+**succeeded** — an offer arrived and was answered — and ICE itself found no
+path. Textbook missing-relay.
 
-Symptom if it fails: the public page sits on "Connecting to the court camera…"
-indefinitely. Fix: add a TURN server to `ICE_SERVERS` in **both**
-`webrtc-stream.ts` and `firestore-signal.ts`. Cloudflare and Metered both have
-free tiers. Nothing else about the design changes.
+A Cloudflare TURN relay is now wired in (section 6d) and **verified to gather
+relay candidates**. What is _not_ yet confirmed is an end-to-end viewer session
+over mobile data; that still needs a real phone on cellular to sign off.
+
+One thing that remains open even with the relay configured: **the relay is on
+the broadcaster only.** In ICE that is normally enough — a viewer simply
+connects to the broadcaster's relayed address. But a relayed transport address
+is always **UDP**, so a viewer on a network that blocks outbound UDP entirely
+still cannot reach it. If that turns up, the fix is giving the viewer its own
+relay by publishing short-lived credentials into the `streams/{courtId}`
+document it already reads — deliberately not done pre-emptively, because that
+puts credentials in a world-readable document (see 9.3).
 
 ### 9.2 Hard ceiling of ~5 internet viewers
 
@@ -688,16 +830,17 @@ and rules out needing an SFU for now. Firestore signalling, the video panel on
 the public page, and the `.env`/`cwd` fix are all done (sections 6–6c, 7) — what
 remains:
 
-1. **Test from a phone on cellular, not office wifi.** Everything so far is
-   verified on one LAN with STUN only (section 9.1). Carrier CGNAT is exactly
-   where STUN-alone fails, and that is the most plausible real internet viewer.
-   Cloudflare and Metered both have free TURN tiers if it turns out to be needed.
+1. **Confirm a viewer on cellular now connects.** The Cloudflare relay is wired
+   in and verified to gather relay candidates (section 6d), but an end-to-end
+   session over mobile data has not been signed off yet. Open the viewer with
+   `?debug=1` and check the `selected candidate pair` line: `relay` on either
+   end means TURN carried it. If it still fails, section 9.1 has the one
+   remaining case and its fix.
 2. **Change `ADMIN_PASSWORD`** before anything is publicly reachable.
 3. **Try full screen / Add to Home Screen / wake lock on a real iPhone and a
    real Android phone** (section 6c). The unit tests mock every platform API
-   involved — `requestFullscreen`, `webkitEnterFullscreen`, `wakeLock` — so the
-   actual platform behaviour, especially the iPhone fallback path, is still
-   unverified outside a browser.
+   involved — `requestFullscreen`, `wakeLock` — so the actual platform
+   behaviour is still unverified outside a browser.
 
 If the audience ever grows past a handful, move to an SFU (LiveKit Cloud, Daily,
 Cloudflare Calls): the phone publishes once and the server fans out. Avoid
@@ -720,6 +863,14 @@ cd packages/desktop && env -u ELECTRON_RUN_AS_NODE npx electron .
 
 # Run the server standalone so dotenv finds packages/server/.env
 cd packages/server && npx tsx src/index.ts
+
+# Is the TURN relay live? (credentials are redacted from this output)
+curl -s http://localhost:3000/api/turn-credentials \
+  | node -e "let r='';process.stdin.on('data',c=>r+=c).on('end',()=>{const b=JSON.parse(r);
+      console.log('configured:',b.configured,'entries:',b.iceServers.length);});"
+
+# Open the public viewer with its on-page connection log
+open "https://courtside-scoreboard-86e96.web.app/?court=<courtId>&debug=1"
 ```
 
 ### Test coverage
@@ -730,8 +881,8 @@ npm test   # jest --coverage in every workspace
 
 | Workspace | Tests | Statements | Branches |
 | --------- | ----- | ---------- | -------- |
-| `client`  | 319   | 98.1%      | 97.8%    |
-| `server`  | 142   | 99.6%      | 99.0%    |
+| `client`  | 335   | 98.2%      | 97.3%    |
+| `server`  | 157   | 99.6%      | 98.7%    |
 | `shared`  | 90    | 100%       | 100%     |
 
 Up from 186/112/90 (68.9%/82.5% statements on client/server) before the
@@ -744,7 +895,8 @@ or near 100%, closing the gap **HANDOFF.md** used to call out explicitly.
 
 `FIREBASE_PROJECT_ID`, `FIREBASE_PRIVATE_KEY`, `FIREBASE_CLIENT_EMAIL` (all three
 required by `cert()`), plus optional `FIREBASE_PRIVATE_KEY_ID`,
-`FIREBASE_CLIENT_ID`. Never commit these.
+`FIREBASE_CLIENT_ID`, and `CLOUDFLARE_TURN_KEY_ID` / `CLOUDFLARE_TURN_API_TOKEN`
+(both required together; see 7.2b). Never commit these.
 
 ### Firestore
 

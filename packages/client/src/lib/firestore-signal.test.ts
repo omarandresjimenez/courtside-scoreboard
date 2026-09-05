@@ -62,6 +62,9 @@ class FakePeerConnection {
   setLocalDescription = jest.fn(async () => undefined);
   setRemoteDescription = jest.fn(async () => undefined);
   addIceCandidate = jest.fn(async () => undefined);
+  // logSelectedCandidatePair() calls this on 'connected'; an empty stats map
+  // is the realistic shape for a peer with no nominated pair yet.
+  getStats = jest.fn(async () => new Map());
 }
 
 let createdPeers: FakePeerConnection[] = [];

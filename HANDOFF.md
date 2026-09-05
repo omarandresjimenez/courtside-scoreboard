@@ -431,6 +431,16 @@ streaming code that previously had none — three real bugs surfaced doing that
 live stream, a StrictMode double pause-emit caught before it shipped). See
 STREAMING_UPGRADE.md sections 5b, 6c and 11.
 
+**A further pass added a Cloudflare TURN relay** after internet viewers failed
+to connect from two different networks — the exact gap section 9.1 had
+predicted. The relay is minted server-side (the TURN key is a long-term secret
+that must never reach a browser) and handed to the broadcaster only, since one
+side offering a relay candidate is enough for ICE. The public viewer also
+gained an **on-page connection log** (`?debug=1`), because the devices that
+fail are phones on other people's networks that nobody can attach a debugger
+to. Configuration is in STREAMING_UPGRADE.md 7.2b; the mechanism and the
+measurements are in 6d.
+
 **Touch points in existing code, worth knowing about:**
 
 - `sockets/index.ts` — one added call at the single broadcast choke point pushes
@@ -468,6 +478,11 @@ STREAMING_UPGRADE.md sections 5b, 6c and 11.
    and Jest with no `dist/` ignore pattern discovers and re-runs them, producing
    a wall of failures that have nothing to do with the code. Build-then-test
    order matters until `testPathIgnorePatterns` excludes it.
+5. **A reachable TURN host is not a working TURN server.** The free
+   `openrelayproject` credentials resolve, accept TCP, and then refuse the
+   allocation (`code=400`, zero relay candidates) — configuring them would have
+   looked like a fix and changed nothing. Always verify a `relay` candidate is
+   actually gathered before believing a relay works.
 
 ## Desktop app (`packages/desktop/`) — Electron wrapper
 
@@ -746,9 +761,9 @@ npm run typecheck     # tsc --noEmit across every package
 npm test              # Jest --coverage in every package
 ```
 
-551 tests total across shared/server/client (90/142/319). Shared is 100%
-coverage on every metric; server is 99.6% statements / 99.0% branches; client
-is 98.1% statements / 97.8% branches — the remaining gaps are one
+582 tests total across shared/server/client (90/157/335). Shared is 100%
+coverage on every metric; server is 99.6% statements / 98.7% branches; client
+is 98.2% statements / 97.3% branches — the remaining gaps are one
 intentionally-uncovered, documented branch in `AdminDashboard.tsx` (the
 not-yet-built "custom" scoring preset — see the comment at its call site), one
 branch in `matches.ts` documented as an istanbul coverage-merge artifact in

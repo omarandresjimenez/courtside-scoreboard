@@ -6,11 +6,12 @@ import {
   type StreamSignalIncoming,
   type StreamSignalOutgoing,
 } from '@courtside/shared';
+import { LAN_ICE_SERVERS } from './ice-config.js';
 
-/** Google's public STUN server — free, no signup, fine for a LAN/POC. NAT
- * traversal for internet viewers behind stricter/symmetric NATs would need
- * a TURN server too, which is out of scope for this POC. */
-const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
+/** STUN only — see LAN_ICE_SERVERS in ice-config.ts for why this path
+ * deliberately does not list TURN. The internet path (firestore-signal.ts)
+ * is the one that needs a relay. */
+const ICE_SERVERS = LAN_ICE_SERVERS;
 
 export interface BroadcasterHandle {
   setVideoEnabled: (enabled: boolean) => void;

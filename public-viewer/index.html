@@ -88,7 +88,7 @@
            comfortable size whether the stage is a phone strip or a full
            16:9 desktop window. */
         z-index: 5;
-        opacity: 0.4;
+        opacity: 0.7;
       }
       .bug-head {
         display: flex;
@@ -268,6 +268,75 @@
         line-height: 1.4;
       }
 
+      /* Diagnostics panel. Deliberately readable on a phone: this exists to
+         be screenshotted or copied out of a device that cannot be attached
+         to a debugger. */
+      .diag {
+        position: absolute;
+        left: 0.75rem;
+        right: 0.75rem;
+        bottom: 0.75rem;
+        z-index: 7;
+        max-height: 45%;
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        background: rgba(6, 9, 18, 0.93);
+        backdrop-filter: blur(6px);
+        overflow: hidden;
+      }
+      .diag[hidden] {
+        display: none !important;
+      }
+      .diag-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.45rem 0.6rem;
+        border-bottom: 1px solid var(--border);
+        font-size: 0.8rem;
+        color: var(--text);
+      }
+      .diag-actions {
+        display: flex;
+        gap: 0.35rem;
+      }
+      .diag-actions button {
+        min-height: 28px;
+        padding: 0.1rem 0.55rem;
+        border: 1px solid var(--border-strong);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text-dim);
+        font-size: 0.75rem;
+        cursor: pointer;
+      }
+      .diag-actions button:hover {
+        color: var(--text);
+      }
+      .diag pre {
+        margin: 0;
+        padding: 0.5rem 0.6rem;
+        overflow: auto;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.7rem;
+        line-height: 1.45;
+        color: var(--text-dim);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .diag pre .ok {
+        color: var(--success);
+      }
+      .diag pre .warn {
+        color: #fbbf24;
+      }
+      .diag pre .err {
+        color: #f87171;
+      }
+
       /* Full-screen control, overlaid bottom-right of the video. */
       .fsbtn {
         position: absolute;
@@ -304,12 +373,51 @@
       .stage:fullscreen {
         width: 100%;
         height: 100%;
+        max-height: none;
+        aspect-ratio: auto;
+        border-radius: 0;
         background: #000;
       }
       .stage:fullscreen #video {
         width: 100%;
         height: 100%;
         object-fit: contain;
+      }
+
+      /* Manual full screen, used where the browser will not put an element
+         full screen — iPhone Safari has no Element.requestFullscreen() at
+         all. Its only native option fullscreens the *video element*, which
+         hands the page to the iOS player and takes every overlay with it,
+         score included. Filling the viewport with the stage instead keeps
+         the score bug on top of the picture, which is the whole point of
+         watching a match. */
+      .stage.fs-manual {
+        position: fixed;
+        inset: 0;
+        width: 100vw;
+        /* dvh, not vh: on mobile Safari vh counts the area behind the
+           browser chrome, so the bottom of the video would sit off-screen. */
+        height: 100dvh;
+        max-height: none;
+        aspect-ratio: auto;
+        border: 0;
+        border-radius: 0;
+        z-index: 9999;
+      }
+      /* Stops the page behind scrolling while the stage covers it. */
+      body.fs-locked {
+        overflow: hidden;
+      }
+
+      /* The score is further from the eye on a full screen, so give it back
+         the size the smaller embedded stage did not have room for. */
+      .stage:fullscreen .scorebug,
+      .stage.fs-manual .scorebug {
+        top: max(1.4rem, env(safe-area-inset-top));
+        left: max(1.4rem, env(safe-area-inset-left));
+        min-width: min(16rem, 42vw);
+        max-width: min(60vw, 30rem);
+        font-size: clamp(0.95rem, 2.2vw, 1.35rem);
       }
 
       @supports (padding: env(safe-area-inset-top)) {
@@ -351,6 +459,19 @@
         >
       </div>
 
+      <!-- Connection diagnostics. Hidden unless ?debug=1, or auto-revealed
+           when the connection fails, so a normal viewer never sees it. -->
+      <div class="diag" id="diag" hidden>
+        <div class="diag-head">
+          <strong>Connection log</strong>
+          <span class="diag-actions">
+            <button type="button" id="diagCopy" title="Copy log">Copy</button>
+            <button type="button" id="diagHide" title="Hide log">✕</button>
+          </span>
+        </div>
+        <pre id="diagBody"></pre>
+      </div>
+
       <!-- Broadcast-style score bug, over the video in the top-left. -->
       <div class="scorebug" id="board" hidden>
         <div class="bug-head">
@@ -379,6 +500,7 @@
         getDocs,
       } from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js';
       import { firebaseConfig } from './firebase-config.js';
+      import { ICE_SERVERS, HAS_TURN, logSelectedCandidatePair } from './ice-config.js';
 
       const params = new URLSearchParams(location.search);
       // Accept ?court=<id> or a trailing path segment, so both a query link and
@@ -394,6 +516,98 @@
         statusEl.hidden = false;
       }
 
+      /* ------------------------------------------------------------------
+         Connection diagnostics.
+
+         This page is the one part of the system that runs on devices nobody
+         can attach a debugger to — someone else's phone, on someone else's
+         network, which is exactly where WebRTC fails. So the log is on the
+         page itself, copyable, rather than in a console no one will open.
+         ------------------------------------------------------------------ */
+      const DIAG_START = Date.now();
+      const diagLines = [];
+      let diagVisible = false;
+
+      function showDiag() {
+        if (diagVisible) return;
+        diagVisible = true;
+        $('diag').hidden = false;
+      }
+
+      /** @param {'info'|'ok'|'warn'|'err'} level */
+      function dbg(level, message, detail) {
+        const t = ((Date.now() - DIAG_START) / 1000).toFixed(2).padStart(6, ' ');
+        const line =
+          `[${t}s] ${message}` + (detail === undefined ? '' : ` ${JSON.stringify(detail)}`);
+        diagLines.push(line);
+
+        const body = $('diagBody');
+        if (body) {
+          const span = document.createElement('span');
+          if (level !== 'info') span.className = level;
+          span.textContent = line + '\n';
+          body.appendChild(span);
+          body.scrollTop = body.scrollHeight;
+        }
+        // Mirrored to the console so a laptop viewer can read it there too.
+        (level === 'err' ? console.error : level === 'warn' ? console.warn : console.info)(
+          '[diag]',
+          line,
+        );
+      }
+
+      // Opt in with ?debug=1; otherwise it reveals itself only when something
+      // actually goes wrong, so an ordinary viewer never sees it.
+      if (params.get('debug') === '1') showDiag();
+
+      $('diagHide')?.addEventListener('click', () => {
+        $('diag').hidden = true;
+        diagVisible = false;
+      });
+
+      $('diagCopy')?.addEventListener('click', async () => {
+        const text = diagLines.join('\n');
+        try {
+          await navigator.clipboard.writeText(text);
+          $('diagCopy').textContent = 'Copied';
+        } catch {
+          // Clipboard needs a secure context and a permission some browsers
+          // refuse; selecting the text is the always-available fallback.
+          const range = document.createRange();
+          range.selectNodeContents($('diagBody'));
+          const sel = getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          $('diagCopy').textContent = 'Selected';
+        }
+        setTimeout(() => ($('diagCopy').textContent = 'Copy'), 1600);
+      });
+
+      // Environment first — half of "it works for me" is answered by this.
+      dbg('info', 'viewer loaded', {
+        court: courtId || null,
+        url: location.origin + location.pathname,
+        secureContext: window.isSecureContext,
+        ua: navigator.userAgent,
+        // Chrome-only, but when present it distinguishes wifi from cellular,
+        // which is the single most useful fact when NAT is suspected.
+        connection: navigator.connection
+          ? {
+              type: navigator.connection.effectiveType,
+              downlinkMbps: navigator.connection.downlink,
+            }
+          : 'unavailable',
+        turnConfigured: HAS_TURN,
+      });
+      if (!HAS_TURN) {
+        dbg(
+          'warn',
+          'no TURN relay configured — STUN only. If both devices are behind ' +
+            'symmetric NAT (mobile data, some corporate wifi) this connection ' +
+            'cannot be established. See ice-config.js.',
+        );
+      }
+
       if (!courtId) {
         setStatus(
           'This link is missing a court. Ask the organiser for the full viewer link.',
@@ -407,14 +621,19 @@
           doc(db, 'matches', courtId),
           (snap) => {
             if (!snap.exists()) {
+              dbg('warn', 'matches/<court> does not exist yet');
               setStatus('Waiting for a match on this court…');
               $('board').hidden = true;
               return;
             }
+            if (!lastUpdate) dbg('ok', 'score document received — Firestore read works');
             lastUpdate = Date.now();
             render(snap.data());
           },
-          (err) => setStatus(`Could not load this match (${err.code}).`, true),
+          (err) => {
+            dbg('err', 'score snapshot failed', { code: err.code, message: err.message });
+            setStatus(`Could not load this match (${err.code}).`, true);
+          },
         );
 
         // The score only changes when a point is scored, so a quiet document is
@@ -450,40 +669,66 @@
        * that path the page never enters fullscreen, so no fullscreenchange
        * fires and the label is left alone; iOS draws its own chrome.
        */
-      function wireFullscreen(stage, video) {
+      function wireFullscreen(stage) {
         const btn = $('fsbtn');
-        const canFullscreenPage = !!(
-          document.fullscreenEnabled || document.webkitFullscreenEnabled
-        );
-        const canFullscreenVideo = typeof video.webkitEnterFullscreen === 'function';
-        if (!canFullscreenPage && !canFullscreenVideo) return;
+        // Always shown: where the browser refuses element full screen the
+        // manual mode below still works, so the control is never a dead end.
         btn.hidden = false;
 
-        const current = () => document.fullscreenElement || document.webkitFullscreenElement;
+        const nativeElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+        const isManual = () => stage.classList.contains('fs-manual');
+
+        function enterManual() {
+          stage.classList.add('fs-manual');
+          document.body.classList.add('fs-locked');
+          sync();
+          dbg('info', 'entered manual full screen (score bug kept on screen)');
+        }
+        function exitManual() {
+          stage.classList.remove('fs-manual');
+          document.body.classList.remove('fs-locked');
+          sync();
+        }
 
         btn.addEventListener('click', () => {
-          if (current()) {
+          if (isManual()) return exitManual();
+          if (nativeElement()) {
             (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
             return;
           }
+          // Element full screen keeps the score bug, because the bug is a
+          // child of the stage. Deliberately NOT falling back to
+          // video.webkitEnterFullscreen(): on iPhone that hands the page to
+          // the native iOS player, which shows the video alone and drops
+          // every overlay — including the score.
           if (stage.requestFullscreen) {
-            stage.requestFullscreen().catch((e) => console.warn('fullscreen refused:', e));
+            stage.requestFullscreen().catch((e) => {
+              dbg('warn', 'native full screen refused, using manual', { message: e.message });
+              enterManual();
+            });
           } else if (stage.webkitRequestFullscreen) {
             stage.webkitRequestFullscreen();
-          } else if (canFullscreenVideo) {
-            video.webkitEnterFullscreen();
+          } else {
+            enterManual();
           }
         });
 
-        const sync = () => {
-          const on = !!current();
+        // A phone has no Escape key, but the button stays visible inside the
+        // stage; on a keyboard Escape should still get you out.
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape' && isManual()) exitManual();
+        });
+
+        function sync() {
+          const on = !!nativeElement() || isManual();
           btn.textContent = on ? '⤡' : '⤢';
           const label = on ? 'Exit full screen' : 'Full screen';
           btn.setAttribute('aria-label', label);
           btn.title = label;
-        };
+        }
         document.addEventListener('fullscreenchange', sync);
         document.addEventListener('webkitfullscreenchange', sync);
+        sync();
       }
 
       /**
@@ -515,7 +760,7 @@
         const stage = $('stage');
         const video = $('video');
         stage.hidden = false;
-        wireFullscreen(stage, video);
+        wireFullscreen(stage);
         keepScreenAwake();
 
         const streamDoc = doc(db, 'streams', courtId);
@@ -524,13 +769,21 @@
         const viewerId = `v_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
         const viewerDoc = doc(db, 'streams', courtId, 'viewers', viewerId);
 
-        const pc = new RTCPeerConnection({
-          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-        });
+        // STUN + TURN — see ice-config.js. STUN alone cannot traverse the
+        // symmetric NAT that mobile data and many corporate networks use.
+        const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
         const remote = new MediaStream();
         video.srcObject = remote;
 
+        dbg('info', 'RTCPeerConnection created', {
+          iceServers: ICE_SERVERS.map((sv) => sv.urls),
+        });
+
         pc.ontrack = (event) => {
+          dbg('ok', 'media track received', {
+            kind: event.track.kind,
+            id: event.track.id.slice(0, 8),
+          });
           event.streams[0]?.getTracks().forEach((t) => remote.addTrack(t));
           stage.classList.add('playing');
           // muted + explicit play(): browsers block autoplay of unmuted media
@@ -540,45 +793,163 @@
         };
 
         pc.onconnectionstatechange = () => {
-          if (pc.connectionState === 'connected') setVideoMsg(null);
-          if (pc.connectionState === 'failed') {
-            stage.classList.remove('playing');
-            setVideoMsg('Could not reach the camera. The court may be on a restricted network.');
+          const state = pc.connectionState;
+          dbg(
+            state === 'failed' ? 'err' : state === 'connected' ? 'ok' : 'info',
+            `connectionState -> ${state}`,
+          );
+
+          if (state === 'connected') {
+            setVideoMsg(null);
+            reportSelectedPair(pc);
+            logSelectedCandidatePair(pc);
           }
-          if (pc.connectionState === 'disconnected') {
+          if (state === 'failed') {
+            stage.classList.remove('playing');
+            // Reaching 'failed' means signalling succeeded and ICE itself
+            // could not find a path — a network problem between the two
+            // devices, not a missing broadcast.
+            dbg(
+              'err',
+              'ICE found no usable path. Signalling worked (an offer arrived and ' +
+                'was answered), so this is NAT traversal, not a missing broadcast. ' +
+                (HAS_TURN
+                  ? 'A TURN relay is configured but did not produce a working path.'
+                  : 'No TURN relay is configured — that is the most likely cause.'),
+            );
+            showDiag();
+            setVideoMsg(
+              'Could not reach the camera. Both devices may be on networks that block direct video.',
+            );
+          }
+          if (state === 'disconnected') {
             stage.classList.remove('playing');
             setVideoMsg('Camera disconnected.');
           }
         };
 
+        pc.oniceconnectionstatechange = () =>
+          dbg('info', `iceConnectionState -> ${pc.iceConnectionState}`);
+        pc.onicegatheringstatechange = () =>
+          dbg('info', `iceGatheringState -> ${pc.iceGatheringState}`);
+
+        /** Which candidate pair actually won, and whether a relay carried it. */
+        function reportSelectedPair(peer) {
+          peer
+            .getStats()
+            .then((stats) => {
+              stats.forEach((r) => {
+                if (r.type !== 'candidate-pair' || r.state !== 'succeeded' || !r.nominated) return;
+                const local = stats.get(r.localCandidateId);
+                const remoteC = stats.get(r.remoteCandidateId);
+                dbg('ok', 'selected candidate pair', {
+                  local: `${local?.candidateType}/${local?.protocol}`,
+                  remote: `${remoteC?.candidateType}/${remoteC?.protocol}`,
+                  viaRelay: local?.candidateType === 'relay' || remoteC?.candidateType === 'relay',
+                });
+              });
+            })
+            .catch(() => {});
+        }
+
         const answerCandidates = collection(viewerDoc, 'answerCandidates');
+
+        // Tally by type rather than logging each one: a normal gather is
+        // dozens of candidates, and the only thing that matters is which
+        // *kinds* were obtained. No relay here with symmetric NAT on the
+        // other side means the connection cannot succeed.
+        const gathered = { host: 0, srflx: 0, prflx: 0, relay: 0 };
         pc.onicecandidate = (e) => {
-          if (e.candidate) addDoc(answerCandidates, e.candidate.toJSON()).catch(() => {});
+          if (!e.candidate) {
+            dbg(
+              gathered.relay > 0 || HAS_TURN === false ? 'info' : 'warn',
+              'local ICE gathering complete',
+              gathered,
+            );
+            if (HAS_TURN && gathered.relay === 0) {
+              dbg(
+                'err',
+                'TURN is configured but produced NO relay candidate — ' +
+                  'the relay is unreachable or its credentials are rejected.',
+              );
+            }
+            return;
+          }
+          const type = (e.candidate.candidate.match(/ typ (\w+)/) || [])[1];
+          if (type && gathered[type] !== undefined) gathered[type]++;
+          addDoc(answerCandidates, e.candidate.toJSON()).catch((err) =>
+            dbg('err', 'failed writing local ICE candidate', { code: err.code }),
+          );
+        };
+
+        // Fires per STUN/TURN server that misbehaves. 701 = could not reach
+        // the server; a 4xx from a TURN server means it answered and refused.
+        pc.onicecandidateerror = (e) => {
+          dbg('warn', 'ICE server error', {
+            url: e.url,
+            code: e.errorCode,
+            text: e.errorText,
+          });
         };
 
         // Announce ourselves; the broadcaster answers by writing an offer here.
-        await setDoc(viewerDoc, { requestedAt: Date.now() });
-
-        onSnapshot(viewerDoc, async (snap) => {
-          const offer = snap.data()?.offer;
-          if (!offer || pc.currentRemoteDescription) return;
-          await pc.setRemoteDescription(new RTCSessionDescription(offer));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          await setDoc(
-            viewerDoc,
-            { answer: { type: answer.type, sdp: answer.sdp } },
-            { merge: true },
-          );
-        });
-
-        onSnapshot(collection(viewerDoc, 'offerCandidates'), (snap) => {
-          snap.docChanges().forEach((c) => {
-            if (c.type === 'added') {
-              pc.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(() => {});
-            }
+        dbg('info', 'announcing viewer to Firestore', { viewerId });
+        try {
+          await setDoc(viewerDoc, { requestedAt: Date.now() });
+          dbg('ok', 'viewer document written — signalling write permitted');
+        } catch (err) {
+          dbg('err', 'could not write viewer document (signalling blocked)', {
+            code: err.code,
+            message: err.message,
           });
-        });
+          showDiag();
+          setVideoMsg('Could not reach the signalling service.');
+          return;
+        }
+
+        onSnapshot(
+          viewerDoc,
+          async (snap) => {
+            const offer = snap.data()?.offer;
+            if (!offer) {
+              dbg('info', 'viewer doc updated, still no offer from the broadcaster');
+              return;
+            }
+            if (pc.currentRemoteDescription) return;
+            dbg('ok', 'offer received from broadcaster', { sdpBytes: offer.sdp?.length });
+            try {
+              await pc.setRemoteDescription(new RTCSessionDescription(offer));
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              await setDoc(
+                viewerDoc,
+                { answer: { type: answer.type, sdp: answer.sdp } },
+                { merge: true },
+              );
+              dbg('ok', 'answer sent — handshake complete, ICE now negotiating');
+            } catch (err) {
+              dbg('err', 'failed answering the offer', { message: err.message });
+              showDiag();
+            }
+          },
+          (err) => dbg('err', 'viewer doc snapshot failed', { code: err.code }),
+        );
+
+        let remoteCandidates = 0;
+        onSnapshot(
+          collection(viewerDoc, 'offerCandidates'),
+          (snap) => {
+            snap.docChanges().forEach((c) => {
+              if (c.type !== 'added') return;
+              remoteCandidates++;
+              pc.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(() => {});
+            });
+            if (remoteCandidates) {
+              dbg('info', 'broadcaster ICE candidates received', { total: remoteCandidates });
+            }
+          },
+          (err) => dbg('err', 'offerCandidates snapshot failed', { code: err.code }),
+        );
 
         // Tell the viewer whether anyone is even broadcasting, so "no video"
         // reads as a fact about the court rather than a broken page.
@@ -589,6 +960,11 @@
           // Only meaningful while the court is actually broadcasting; a stale
           // paused flag on a dead stream would be misleading.
           $('pausedmsg').hidden = !(live && data?.paused);
+          dbg('info', 'stream document', {
+            exists: snap.exists(),
+            live,
+            paused: !!data?.paused,
+          });
 
           if (!live) {
             if (!stage.classList.contains('playing')) {
