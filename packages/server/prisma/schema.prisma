@@ -72,6 +72,10 @@ model Match {
   /// Country each side represents, optional even when a team name is set.
   teamACountry    String?
   teamBCountry    String?
+  /// Competition category as announced, e.g. "BS U19", "WD U15". Free text:
+  /// the codes vary by federation and age group, so a fixed list would be
+  /// wrong somewhere. Optional — club play often has none.
+  category        String?
   /// Locks matchType/scoring fields the moment the first point is scored.
   scoringLocked   Boolean      @default(false)
   /// Long random secret; required on every umpire write action.
@@ -100,7 +104,12 @@ model Player {
   match     Match  @relation(fields: [matchId], references: [id])
   /// "A" | "B"
   side      String
+  /// Given name. Players created before first/last name were captured
+  /// separately hold their full name here — see formatPlayerName().
   name      String
+  /// Family name. Defaults to empty so the column can be added to an existing
+  /// database without touching the rows already in it.
+  lastName  String @default("")
   shortName String
 
   @@index([matchId])

@@ -21,7 +21,9 @@ export function setMatchesSocketServer(server: Server): void {
 
 interface CreateMatchBody {
   matchType: MatchType;
-  players: Array<{ side: 'A' | 'B'; name: string; shortName?: string }>;
+  players: Array<{ side: 'A' | 'B'; name: string; lastName?: string; shortName?: string }>;
+  /** Competition category as announced, e.g. "BS U19". Free text, optional. */
+  category?: string;
   scoringConfig: ScoringConfig;
   courtId?: string;
   umpireId?: string;
@@ -118,14 +120,21 @@ matchesRouter.post('/matches', adminAuth, async (req, res) => {
       umpireToken: generateUmpireToken(),
       umpireCode: generateJoinCode(),
       tournamentId: body.tournamentId,
+      category: body.category?.trim() || null,
       assignedCourtId: body.courtId,
       assignedUmpireId: body.umpireId,
       players: {
-        create: body.players.map((p) => ({
-          side: p.side,
-          name: p.name,
-          shortName: p.shortName?.trim() || p.name.slice(0, 3).toUpperCase(),
-        })),
+        create: body.players.map((p) => {
+          const lastName = p.lastName?.trim() ?? '';
+          return {
+            side: p.side,
+            name: p.name,
+            lastName,
+            // Prefer the family name for the short form: on a TV wall two
+            // players sharing a given name are otherwise indistinguishable.
+            shortName: p.shortName?.trim() || (lastName || p.name).slice(0, 3).toUpperCase(),
+          };
+        }),
       },
     },
   });
@@ -192,6 +201,7 @@ matchesRouter.get('/matches', adminAuth, async (_req, res) => {
           createdAt: state.match.createdAt,
           startedAt: state.match.startedAt,
           completedAt: state.match.completedAt,
+          category: state.match.category ?? null,
           players: state.match.players,
           derived: {
             sets: state.derived.sets.map(({ setNumber, scoreA, scoreB, winner }) => ({

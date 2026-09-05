@@ -30,8 +30,8 @@ function buildState(overrides: Partial<MatchStatePayload['derived']> = {}): Matc
       scoringLocked: true,
       teams: { A: { name: null, country: null }, B: { name: null, country: null } },
       players: [
-        { playerId: 'a1', side: 'A', name: 'Alice', shortName: 'ALI' },
-        { playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' },
+        { playerId: 'a1', side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+        { playerId: 'b1', side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
       ],
       umpireToken: 'tok',
       umpireCode: 'CODE01',
@@ -80,10 +80,10 @@ function buildDoublesState(
   const state = buildState(overrides);
   state.match.matchType = 'doubles';
   state.match.players = [
-    { playerId: 'a1', side: 'A', name: 'Alice', shortName: 'ALI' },
-    { playerId: 'a2', side: 'A', name: 'Amy', shortName: 'AMY' },
-    { playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' },
-    { playerId: 'b2', side: 'B', name: 'Ben', shortName: 'BEN' },
+    { playerId: 'a1', side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+    { playerId: 'a2', side: 'A', name: 'A. Stone', lastName: 'Stone', shortName: 'AMY' },
+    { playerId: 'b1', side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
+    { playerId: 'b2', side: 'B', name: 'B. Clark', lastName: 'Clark', shortName: 'BEN' },
   ];
   return state;
 }
@@ -179,6 +179,17 @@ describe('UmpireScreen', () => {
     });
   });
 
+  it('shows the category instead of the match type, which it already implies', () => {
+    const state = buildState();
+    state.match.category = 'MD U15';
+    ready(state);
+    renderAt('m1', 'tok');
+
+    expect(screen.getByText('MD U15')).toBeInTheDocument();
+    // "MD U15" already says men's doubles; repeating the match type is noise.
+    expect(screen.queryByText('singles')).not.toBeInTheDocument();
+  });
+
   describe('scoring', () => {
     it('shows both teams with their sets and current score', () => {
       ready(
@@ -197,7 +208,7 @@ describe('UmpireScreen', () => {
       renderAt('m1', 'tok');
       // Names appear in both the header and a court box, so scope to the header.
       expect([...document.querySelectorAll('.umpire-team-name')].map((n) => n.textContent)).toEqual(
-        ['Alice', 'Bilal'],
+        ['A. Adams', 'B. Bruno'],
       );
       expect(
         [...document.querySelectorAll('.umpire-team-score')].map((n) => n.textContent),
@@ -225,9 +236,9 @@ describe('UmpireScreen', () => {
       ready(buildState());
       renderAt('m1', 'tok');
       // Side A is drawn left in game 1, so the left button must score for A.
-      await userEvent.click(screen.getByLabelText('Point to Alice'));
+      await userEvent.click(screen.getByLabelText('Point to A. Adams'));
       expect(noopHandlers.addPoint).toHaveBeenCalledWith('A');
-      await userEvent.click(screen.getByLabelText('Point to Bilal'));
+      await userEvent.click(screen.getByLabelText('Point to B. Bruno'));
       expect(noopHandlers.addPoint).toHaveBeenCalledWith('B');
     });
 
@@ -318,7 +329,7 @@ describe('UmpireScreen', () => {
     it('locks scoring during the interval and shows the 60-second countdown', () => {
       ready(midGameInterval());
       renderAt('m1', 'tok');
-      expect(screen.getByLabelText('Point to Alice')).toBeDisabled();
+      expect(screen.getByLabelText('Point to A. Adams')).toBeDisabled();
       expect(screen.getByRole('button', { name: /Interval 1:00/ })).toBeInTheDocument();
     });
 
@@ -378,7 +389,7 @@ describe('UmpireScreen', () => {
         }),
       );
       renderAt('m1', 'tok');
-      expect(screen.getByLabelText('Point to Alice')).toBeDisabled();
+      expect(screen.getByLabelText('Point to A. Adams')).toBeDisabled();
       expect(screen.getByRole('button', { name: /Game interval 2:00/ })).toBeInTheDocument();
     });
 
@@ -411,7 +422,7 @@ describe('UmpireScreen', () => {
       expect(
         screen.getByRole('alertdialog', { name: 'End this match early?' }),
       ).toBeInTheDocument();
-      await userEvent.click(screen.getByRole('button', { name: 'Bilal wins' }));
+      await userEvent.click(screen.getByRole('button', { name: 'B. Bruno wins' }));
       expect(noopHandlers.retireMatch).toHaveBeenCalledWith('B');
     });
 
@@ -453,10 +464,10 @@ describe('UmpireScreen', () => {
       s.match.completedAt = new Date(Date.parse(s.match.startedAt!) + 65_000).toISOString();
       ready(s);
       renderAt('m1', 'tok');
-      expect(screen.getByText('Alice wins the match')).toBeInTheDocument();
+      expect(screen.getByText('A. Adams wins the match')).toBeInTheDocument();
       expect(screen.getByText(/Match time 1 min 5 sec/)).toBeInTheDocument();
-      expect(screen.queryByLabelText('Point to Alice')).not.toBeInTheDocument();
-      expect(screen.getByRole('status')).toHaveTextContent('Match won by Alice');
+      expect(screen.queryByLabelText('Point to A. Adams')).not.toBeInTheDocument();
+      expect(screen.getByRole('status')).toHaveTextContent('Match won by A. Adams');
     });
 
     it('counts match time up to now while the result is in but the clock has not stopped', () => {
@@ -545,8 +556,10 @@ describe('UmpireScreen', () => {
       expect(
         summary.querySelectorAll('.tv-player-row')[0]!.querySelector('.retired-tag'),
       ).toBeInTheDocument();
-      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Bilal wins the match');
-      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Alice retired');
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+        'B. Bruno wins the match',
+      );
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('A. Adams retired');
     });
 
     it('shows no retirement marker for a match played out', () => {
@@ -576,7 +589,9 @@ describe('UmpireScreen', () => {
 
     it('falls back to the side letter when a side has no players', () => {
       const s = buildState();
-      s.match.players = [{ playerId: 'a1', side: 'A', name: 'Alice', shortName: 'ALI' }];
+      s.match.players = [
+        { playerId: 'a1', side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+      ];
       ready(s);
       renderAt('m1', 'tok');
       expect(screen.getByText('Side B')).toBeInTheDocument();
@@ -598,11 +613,11 @@ describe('UmpireScreen', () => {
         }),
       );
       renderAt('m1', 'tok');
-      expect(servingBoxName()).toBe('Alice');
+      expect(servingBoxName()).toBe('A. Adams');
       // Mirrored halves: each player's right court is the lower box on the
       // left half and the upper box on the right half, so the pair reads
       // diagonally — which is what a service actually is.
-      expect(boxNames()).toEqual(['', 'Alice', 'Bilal', '']);
+      expect(boxNames()).toEqual(['', 'A. Adams', 'B. Bruno', '']);
     });
 
     it('moves the singles server to the left court on an odd score', () => {
@@ -619,14 +634,14 @@ describe('UmpireScreen', () => {
         }),
       );
       renderAt('m1', 'tok');
-      expect(boxNames()).toEqual(['Alice', '', '', 'Bilal']);
-      expect(servingBoxName()).toBe('Alice');
+      expect(boxNames()).toEqual(['A. Adams', '', '', 'B. Bruno']);
+      expect(servingBoxName()).toBe('A. Adams');
     });
 
     it('highlights side B when side B is serving', () => {
       ready(buildState({ serve: { servingSide: 'B', serverPlayerId: null, courtPositions: {} } }));
       renderAt('m1', 'tok');
-      expect(servingBoxName()).toBe('Bilal');
+      expect(servingBoxName()).toBe('B. Bruno');
     });
 
     it('places doubles partners from courtPositions and flags only the server', () => {
@@ -648,8 +663,8 @@ describe('UmpireScreen', () => {
         }),
       );
       renderAt('m1', 'tok');
-      expect(boxNames()).toEqual(['Amy', 'Alice', 'Bilal', 'Ben']);
-      expect(servingBoxName()).toBe('Amy');
+      expect(boxNames()).toEqual(['A. Stone', 'A. Adams', 'B. Bruno', 'B. Clark']);
+      expect(servingBoxName()).toBe('A. Stone');
       expect(document.querySelectorAll('.court-box-serving')).toHaveLength(1);
     });
 
@@ -664,7 +679,7 @@ describe('UmpireScreen', () => {
         }),
       );
       renderAt('m1', 'tok');
-      expect(boxNames()).toEqual(['', 'Alice', 'Bilal', 'Ben']);
+      expect(boxNames()).toEqual(['', 'A. Adams', 'B. Bruno', 'B. Clark']);
     });
 
     it('leaves a doubles box blank when positions are unknown', () => {
@@ -693,7 +708,7 @@ describe('UmpireScreen', () => {
       );
       renderAt('m1', 'tok');
       const names = [...document.querySelectorAll('.umpire-team-name')].map((n) => n.textContent);
-      expect(names).toEqual(['Bilal', 'Alice']);
+      expect(names).toEqual(['B. Bruno', 'A. Adams']);
     });
   });
 
@@ -728,7 +743,7 @@ describe('UmpireScreen', () => {
     it('swaps a pair between service courts, changing who serves first', async () => {
       ready(buildDoublesState({ serve: pending }));
       renderAt('m1', 'tok');
-      await userEvent.click(screen.getByLabelText('Swap Alice / Amy service courts'));
+      await userEvent.click(screen.getByLabelText('Swap A. Adams / A. Stone service courts'));
       await userEvent.click(screen.getByRole('button', { name: 'Start match' }));
       expect(noopHandlers.startSet).toHaveBeenCalledWith('A', 'a2', {
         A: { right: 'a2', left: 'a1' },
@@ -741,14 +756,14 @@ describe('UmpireScreen', () => {
       const view = renderAt('m1', 'tok');
       await userEvent.click(screen.getByLabelText('Swap ends'));
       expect([...document.querySelectorAll('.umpire-team-name')].map((n) => n.textContent)).toEqual(
-        ['Bilal', 'Alice'],
+        ['B. Bruno', 'A. Adams'],
       );
       expect(localStorage.getItem('courtside:ends:m1')).toBe('B');
       // A refresh must not silently mirror the court back.
       view.unmount();
       renderAt('m1', 'tok');
       expect([...document.querySelectorAll('.umpire-team-name')].map((n) => n.textContent)).toEqual(
-        ['Bilal', 'Alice'],
+        ['B. Bruno', 'A. Adams'],
       );
     });
 
@@ -774,7 +789,7 @@ describe('UmpireScreen', () => {
       s.match.players = s.match.players.filter((p) => p.playerId !== 'a2');
       ready(s);
       renderAt('m1', 'tok');
-      await userEvent.click(screen.getByLabelText('Swap Alice service courts'));
+      await userEvent.click(screen.getByLabelText('Swap A. Adams service courts'));
       await userEvent.click(screen.getByRole('button', { name: 'Start match' }));
       expect(noopHandlers.startSet).toHaveBeenCalledWith('A', 'a1', {
         A: { right: 'a1', left: '' },
@@ -784,7 +799,9 @@ describe('UmpireScreen', () => {
 
     it('does not start a match for a side with no players', async () => {
       const s = buildState({ serve: pending });
-      s.match.players = [{ playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' }];
+      s.match.players = [
+        { playerId: 'b1', side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
+      ];
       ready(s);
       renderAt('m1', 'tok');
       await userEvent.click(screen.getByRole('button', { name: 'Start match' }));
@@ -794,7 +811,7 @@ describe('UmpireScreen', () => {
     it('disables the point buttons until the opening serve is set', () => {
       ready(buildState({ serve: pending }));
       renderAt('m1', 'tok');
-      expect(screen.getByLabelText('Point to Alice')).toBeDisabled();
+      expect(screen.getByLabelText('Point to A. Adams')).toBeDisabled();
     });
 
     it('offers no swap controls in singles', () => {

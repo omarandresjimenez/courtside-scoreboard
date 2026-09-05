@@ -62,8 +62,8 @@ describe('umpire connections', () => {
   it('sends the current match state once authorized', async () => {
     const match = mockPrisma.seedMatch({ umpireToken: 'good-token' });
     mockPrisma.seedPlayers(match.id, [
-      { side: 'A', name: 'Alice', shortName: 'ALI' },
-      { side: 'B', name: 'Bilal', shortName: 'BIL' },
+      { side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+      { side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
     ]);
     const socket = connect({ role: 'umpire', matchId: match.id, token: 'good-token' });
     const state = await waitFor<{ match: { matchId: string } }>(socket, SERVER_EVENTS.MATCH_STATE);
@@ -146,10 +146,10 @@ describe('scoring over the socket', () => {
   it('records and broadcasts the umpire-selected opening server', async () => {
     const match = mockPrisma.seedMatch({ umpireToken: 'tok-start', matchType: 'doubles' });
     mockPrisma.seedPlayers(match.id, [
-      { side: 'A', name: 'Alice', shortName: 'ALI' },
-      { side: 'A', name: 'Ava', shortName: 'AVA' },
-      { side: 'B', name: 'Bilal', shortName: 'BIL' },
-      { side: 'B', name: 'Bea', shortName: 'BEA' },
+      { side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+      { side: 'A', name: 'Ava', lastName: 'Ava', shortName: 'AVA' },
+      { side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
+      { side: 'B', name: 'Bea', lastName: 'Blue', shortName: 'BEA' },
     ]);
     const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-start' });
     const initial = await waitFor<{
@@ -219,8 +219,8 @@ describe('scoring over the socket', () => {
   it('rejects START_SET when the chosen player is not on the declared serving side', async () => {
     const match = mockPrisma.seedMatch({ umpireToken: 'tok-badserver' });
     mockPrisma.seedPlayers(match.id, [
-      { side: 'A', name: 'Alice', shortName: 'ALI' },
-      { side: 'B', name: 'Bilal', shortName: 'BIL' },
+      { side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+      { side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
     ]);
     const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-badserver' });
     const state = await waitFor<{ match: { players: Array<{ playerId: string; side: string }> } }>(
@@ -244,10 +244,10 @@ describe('scoring over the socket', () => {
   it('rejects a doubles START_SET missing valid court positions', async () => {
     const match = mockPrisma.seedMatch({ umpireToken: 'tok-doubles', matchType: 'doubles' });
     mockPrisma.seedPlayers(match.id, [
-      { side: 'A', name: 'Alice', shortName: 'ALI' },
-      { side: 'A', name: 'Ava', shortName: 'AVA' },
-      { side: 'B', name: 'Bilal', shortName: 'BIL' },
-      { side: 'B', name: 'Bea', shortName: 'BEA' },
+      { side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+      { side: 'A', name: 'Ava', lastName: 'Ava', shortName: 'AVA' },
+      { side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
+      { side: 'B', name: 'Bea', lastName: 'Blue', shortName: 'BEA' },
     ]);
     const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-doubles' });
     const state = await waitFor<{ match: { players: Array<{ playerId: string; side: string }> } }>(
@@ -272,8 +272,8 @@ describe('scoring over the socket', () => {
   it('no-ops START_SET if the match vanished between authorizing and the action running', async () => {
     const match = mockPrisma.seedMatch({ umpireToken: 'tok-vanish-start' });
     mockPrisma.seedPlayers(match.id, [
-      { side: 'A', name: 'Alice', shortName: 'ALI' },
-      { side: 'B', name: 'Bilal', shortName: 'BIL' },
+      { side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+      { side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
     ]);
     const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-vanish-start' });
     const initial = await waitFor<{

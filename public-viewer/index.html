@@ -90,6 +90,18 @@
         z-index: 5;
         opacity: 0.7;
       }
+      .bug-category {
+        padding: 0.05rem 0.4rem;
+        border: 1px solid var(--border-strong);
+        border-radius: 4px;
+        color: var(--text-dim);
+        font-size: 0.85em;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+      }
+      .bug-category[hidden] {
+        display: none !important;
+      }
       .bug-head {
         display: flex;
         align-items: center;
@@ -513,6 +525,7 @@
       <div class="scorebug" id="board" hidden>
         <div class="bug-head">
           <span id="court">Court</span>
+          <span class="bug-category" id="category" hidden></span>
           <span class="bug-live"
             ><span class="dot" id="dot"></span><span id="liveText">Live</span></span
           >
@@ -1221,12 +1234,33 @@
         el.classList.toggle('err', isError);
       }
 
-      const firstName = (n) => (n || '').split(/\s+/)[0] || n || '';
+      /**
+       * Mirror of formatPlayerName() in packages/shared/src/names.ts — this
+       * page has no build step, so it cannot import from the workspace. Keep
+       * the two in step: scoreboards read "J. Pérez", never a bare given name.
+       */
+      function formatPlayerName(p) {
+        const given = (p.name || '').trim();
+        const family = (p.lastName || '').trim();
+        const initial = (w) => ([...w][0] || '').toUpperCase();
+
+        if (given && family) return `${initial(given)}. ${family}`;
+        if (family) return family;
+        if (given) {
+          // Players created before first/last name were captured separately
+          // hold their whole name here.
+          const parts = given.split(/\s+/).filter(Boolean);
+          if (parts.length > 1) return `${initial(parts[0])}. ${parts[parts.length - 1]}`;
+          return given;
+        }
+        return (p.shortName || '').trim();
+      }
 
       function sideName(data, side) {
         const names = (data.players || [])
           .filter((p) => p.side === side)
-          .map((p) => firstName(p.name) || p.shortName);
+          .map(formatPlayerName)
+          .filter(Boolean);
         return names.join(' / ') || side;
       }
 
@@ -1242,6 +1276,9 @@
         const shown = sets.length ? sets : [{ setNumber: 1, scoreA: 0, scoreB: 0 }];
 
         $('court').textContent = data.courtLabel || 'Court';
+        const categoryEl = $('category');
+        categoryEl.textContent = data.category || '';
+        categoryEl.hidden = !data.category;
         $('board').hidden = false;
 
         for (const side of ['A', 'B']) {

@@ -29,8 +29,8 @@ function buildState(overrides: Partial<MatchStatePayload['derived']> = {}): Matc
       scoringLocked: true,
       teams: { A: { name: null, country: null }, B: { name: null, country: null } },
       players: [
-        { playerId: 'a1', side: 'A', name: 'Alice', shortName: 'ALI' },
-        { playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' },
+        { playerId: 'a1', side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+        { playerId: 'b1', side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
       ],
       umpireToken: 'tok',
       umpireCode: 'CODE01',
@@ -77,6 +77,27 @@ beforeEach(() => {
 });
 
 describe('TvScreen', () => {
+  it('shows the category instead of the match type, which it already implies', () => {
+    const state = buildState();
+    state.match.category = 'MS U19';
+    mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
+    renderAt('c1');
+
+    expect(screen.getByText('MS U19')).toBeInTheDocument();
+    // "MS U19" already says men's singles; repeating "singles" beside it is noise.
+    expect(screen.queryByText('singles')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the match type when no category was entered', () => {
+    const state = buildState();
+    state.match.category = null;
+    mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
+    const { container } = renderAt('c1');
+
+    expect(screen.getByText('singles')).toBeInTheDocument();
+    expect(container.querySelector('.category-pill')).toBeNull();
+  });
+
   it('reports a missing court ID rather than connecting with an empty one', () => {
     mockUseMatchState.mockReturnValue({ state: null, isFromCache: false, error: null });
     render(
@@ -106,8 +127,8 @@ describe('TvScreen', () => {
   it('renders the live score with player names and a serving marker', () => {
     mockUseMatchState.mockReturnValue({ state: buildState(), isFromCache: false, error: null });
     renderAt('c1');
-    expect(screen.getByText('Alice')).toBeInTheDocument();
-    expect(screen.getByText('Bilal')).toBeInTheDocument();
+    expect(screen.getByText('A. Adams')).toBeInTheDocument();
+    expect(screen.getByText('B. Bruno')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
     expect(screen.getByText('Serving')).toBeInTheDocument();
@@ -185,13 +206,13 @@ describe('TvScreen', () => {
       error: null,
     });
     renderAt('c1');
-    expect(screen.getByText(/Alice wins the match/)).toBeInTheDocument();
+    expect(screen.getByText(/A. Adams wins the match/)).toBeInTheDocument();
     expect(screen.getByLabelText('Match score')).toBeInTheDocument();
     expect(screen.getByText('Set 3')).toBeInTheDocument();
     expect(screen.queryByText('Set 4')).not.toBeInTheDocument();
     expect(screen.getAllByText('21')[0]).toHaveClass('set-score-winner');
     expect(screen.getAllByText('21')[1]).toHaveClass('set-score-winner');
-    expect(screen.getByText('Alice').closest('.tv-player-row')).toHaveClass('match-winner');
+    expect(screen.getByText('A. Adams').closest('.tv-player-row')).toHaveClass('match-winner');
     expect(screen.getByText('Match time 3 min 12 sec')).toBeInTheDocument();
     const reloadSpy = jest.fn();
     Object.defineProperty(window, 'location', {
@@ -257,8 +278,8 @@ describe('TvScreen', () => {
   it("falls back to a player's shortName when their given name has no usable first word", () => {
     const state = buildState();
     state.match.players = [
-      { playerId: 'a1', side: 'A', name: '  ', shortName: 'ALI' },
-      { playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' },
+      { playerId: 'a1', side: 'A', name: '  ', lastName: '', shortName: 'ALI' },
+      { playerId: 'b1', side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
     ];
     mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
     renderAt('c1');
@@ -271,7 +292,7 @@ describe('TvScreen', () => {
     state.match.completedAt = null;
     mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
     renderAt('c1');
-    expect(screen.getByText(/Alice wins the match/)).toBeInTheDocument();
+    expect(screen.getByText(/A. Adams wins the match/)).toBeInTheDocument();
     expect(screen.queryByText(/Match time/)).not.toBeInTheDocument();
   });
 

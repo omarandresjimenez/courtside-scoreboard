@@ -71,7 +71,14 @@ export interface PublicScoreboard {
   matchType: string;
   status: string;
   courtLabel: string | null;
-  players: Array<{ playerId: string; side: string; name: string; shortName: string }>;
+  players: Array<{
+    playerId: string;
+    side: string;
+    name: string;
+    lastName: string;
+    shortName: string;
+  }>;
+  category: string | null;
   teams: unknown;
   startedAt: string | null;
   completedAt: string | null;
@@ -90,10 +97,12 @@ export function toPublicScoreboard(state: {
     matchType: String(m.matchType ?? ''),
     status: String(m.status ?? ''),
     courtLabel: (m.courtLabel as string | null) ?? null,
+    category: (m.category as string | null) ?? null,
     players: ((m.players as PublicScoreboard['players']) ?? []).map((p) => ({
       playerId: p.playerId,
       side: p.side,
       name: p.name,
+      lastName: p.lastName,
       shortName: p.shortName,
     })),
     teams: m.teams ?? null,

@@ -1,3 +1,4 @@
+import { formatSideNames } from '@courtside/shared';
 import { useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMatchState } from '../lib/useMatchState.js';
@@ -31,11 +32,7 @@ export function StreamViewer() {
 
   const { match, derived } = state ?? {};
 
-  const playerName = (side: 'A' | 'B') =>
-    (match?.players ?? [])
-      .filter((p) => p.side === side)
-      .map((p) => p.name.split(/\s+/)[0] || p.shortName)
-      .join(' / ') || side;
+  const playerName = (side: 'A' | 'B') => formatSideNames(match?.players ?? [], side);
 
   const scoreSets = !derived
     ? []
@@ -89,6 +86,11 @@ export function StreamViewer() {
         <div className="stream-score-overlay">
           <div className="stream-score-header">
             <span className="summary-pill">{match?.courtLabel ?? 'Court'}</span>
+            {(match?.category ?? match?.matchType) && (
+              <span className={`summary-pill${match?.category ? ' category-pill' : ''}`}>
+                {match?.category ?? match?.matchType}
+              </span>
+            )}
             {/* Isolated so its per-second tick re-renders two digits, not the
                 video container (see Clock.tsx). */}
             <Clock className="summary-pill" />

@@ -2,6 +2,12 @@ import https from 'node:https';
 import { generate } from 'selfsigned';
 import { createApp } from './app.js';
 import { config } from './config.js';
+import { ensureSchemaColumns } from './db/ensure-columns.js';
+
+// Before anything serves a request: an existing database file may predate
+// columns this build queries, and Prisma fails the whole query rather than
+// degrading. Additive only — see ensure-columns.ts for why this exists at all.
+await ensureSchemaColumns();
 
 const { app, httpServer, io } = createApp();
 

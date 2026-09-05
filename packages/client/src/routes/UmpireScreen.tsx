@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { umpireCall, type Side } from '@courtside/shared';
+import { umpireCall, type Side, formatSideNames, formatPlayerName } from '@courtside/shared';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useMatchState } from '../lib/useMatchState.js';
 import { CourtDiagram } from './CourtDiagram.js';
@@ -93,12 +93,11 @@ export function UmpireScreen() {
   const { match, derived } = state;
   const isDoubles = match.matchType === 'doubles';
   const sidePlayers = (side: Side) => match.players.filter((p) => p.side === side);
-  const teamName = (side: Side) =>
-    sidePlayers(side)
-      .map((p) => p.name)
-      .join(' / ') || `Side ${side}`;
-  const nameFor = (playerId: string) =>
-    match.players.find((p) => p.playerId === playerId)?.name ?? '';
+  const teamName = (side: Side) => formatSideNames(match.players, side, `Side ${side}`);
+  const nameFor = (playerId: string) => {
+    const player = match.players.find((p) => p.playerId === playerId);
+    return player ? formatPlayerName(player) : '';
+  };
   const scoreFor = (side: Side) =>
     side === 'A' ? derived.currentSet.scoreA : derived.currentSet.scoreB;
 
@@ -205,7 +204,10 @@ export function UmpireScreen() {
       }
       scoreFor={scoreFor}
       nameFor={nameFor}
-      singlesNameFor={(side) => sidePlayers(side)[0]?.name ?? ''}
+      singlesNameFor={(side) => {
+        const player = sidePlayers(side)[0];
+        return player ? formatPlayerName(player) : '';
+      }}
       overlayFor={
         isReadyToScore || !isDoubles
           ? undefined
@@ -235,7 +237,10 @@ export function UmpireScreen() {
 
       <div className="umpire-meta">
         <span className="summary-pill">{match.courtLabel ?? 'Court'}</span>
-        <span className="summary-pill">{match.matchType}</span>
+        {/* Category over match type: "MS U19" already says singles. */}
+        <span className={`summary-pill${match.category ? ' category-pill' : ''}`}>
+          {match.category ?? match.matchType}
+        </span>
       </div>
 
       <header className="umpire-teams">

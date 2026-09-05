@@ -13,6 +13,7 @@ interface FakePlayerRow {
   matchId: string;
   side: string;
   name: string;
+  lastName: string;
   shortName: string;
 }
 
@@ -35,6 +36,7 @@ interface FakeMatchRow {
   pointsToWin: number;
   capScore: number;
   intervalAt: number;
+  category: string | null;
   scoringLocked: boolean;
   umpireToken: string;
   umpireCode: string;
@@ -113,6 +115,7 @@ export function createFakePrisma() {
       teamBName: null,
       teamACountry: null,
       teamBCountry: null,
+      category: null,
       scoringLocked: false,
       umpireToken: 'test-token',
       umpireCode: 'TESTCODE',
@@ -196,6 +199,7 @@ export function createFakePrisma() {
           pointsToWin: data.pointsToWin as number,
           capScore: data.capScore as number,
           intervalAt: data.intervalAt as number,
+          category: (data.category as string | null) ?? null,
           scoringLocked: false,
           umpireToken: data.umpireToken as string,
           umpireCode: data.umpireCode as string,

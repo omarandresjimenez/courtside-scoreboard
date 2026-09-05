@@ -31,8 +31,8 @@ function buildState(overrides: Record<string, unknown> = {}): MatchStatePayload 
       scoringLocked: true,
       teams: { A: { name: null, country: null }, B: { name: null, country: null } },
       players: [
-        { playerId: 'a1', side: 'A', name: 'Alice Adams', shortName: 'ALI' },
-        { playerId: 'b1', side: 'B', name: 'Bilal Bruno', shortName: 'BIL' },
+        { playerId: 'a1', side: 'A', name: 'Alice Adams', lastName: 'Adams', shortName: 'ALI' },
+        { playerId: 'b1', side: 'B', name: 'Bilal Bruno', lastName: 'Bruno', shortName: 'BIL' },
       ],
       umpireToken: 'tok',
       umpireCode: 'CODE01',
@@ -147,10 +147,19 @@ describe('StreamViewer', () => {
     renderAt();
 
     expect(screen.getByText('Court 1')).toBeInTheDocument();
-    expect(screen.getByText('Alice')).toBeInTheDocument();
-    expect(screen.getByText('Bilal')).toBeInTheDocument();
+    expect(screen.getByText('A. Adams')).toBeInTheDocument();
+    expect(screen.getByText('B. Bruno')).toBeInTheDocument();
     expect(screen.getByText('7')).toBeInTheDocument();
     expect(screen.getByText('4')).toBeInTheDocument();
+  });
+
+  it('shows the match category on the score overlay', () => {
+    const state = buildState();
+    (state.match as { category?: string | null }).category = 'WS U15';
+    mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
+    renderAt();
+
+    expect(screen.getByText('WS U15')).toBeInTheDocument();
   });
 
   it('announces the winner when the match is decided', () => {
@@ -160,7 +169,7 @@ describe('StreamViewer', () => {
       error: null,
     });
     renderAt();
-    expect(screen.getByText('Alice wins')).toBeInTheDocument();
+    expect(screen.getByText('A. Adams wins')).toBeInTheDocument();
   });
 
   it('tells the viewer no match is on this court yet when state errored', () => {
@@ -250,8 +259,8 @@ describe('StreamViewer', () => {
   it("falls back to a player's short name when they have no full name", () => {
     const state = buildState();
     state.match.players = [
-      { playerId: 'a1', side: 'A', name: '', shortName: 'ALI' },
-      { playerId: 'b1', side: 'B', name: '', shortName: 'BIL' },
+      { playerId: 'a1', side: 'A', name: '', lastName: '', shortName: 'ALI' },
+      { playerId: 'b1', side: 'B', name: '', lastName: '', shortName: 'BIL' },
     ];
     mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
     renderAt();
@@ -272,14 +281,14 @@ describe('StreamViewer', () => {
   it('names both players of a doubles pair', () => {
     const state = buildState();
     state.match.players = [
-      { playerId: 'a1', side: 'A', name: 'Alice Adams', shortName: 'ALI' },
-      { playerId: 'a2', side: 'A', name: 'Anna Ames', shortName: 'ANN' },
-      { playerId: 'b1', side: 'B', name: 'Bilal Bruno', shortName: 'BIL' },
-      { playerId: 'b2', side: 'B', name: 'Bea Blue', shortName: 'BEA' },
+      { playerId: 'a1', side: 'A', name: 'Alice Adams', lastName: 'Adams', shortName: 'ALI' },
+      { playerId: 'a2', side: 'A', name: 'Anna Ames', lastName: 'Ames', shortName: 'ANN' },
+      { playerId: 'b1', side: 'B', name: 'Bilal Bruno', lastName: 'Bruno', shortName: 'BIL' },
+      { playerId: 'b2', side: 'B', name: 'Bea Blue', lastName: 'Blue', shortName: 'BEA' },
     ];
     mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
     renderAt();
 
-    expect(screen.getByText('Alice / Anna')).toBeInTheDocument();
+    expect(screen.getByText('A. Adams / A. Ames')).toBeInTheDocument();
   });
 });

@@ -16,8 +16,8 @@ describe('loadMatchState', () => {
   it('assembles the Match and replays its events through the shared scoring engine', async () => {
     const match = mockPrisma.seedMatch({ pointsToWin: 21, capScore: 30, intervalAt: 11 });
     mockPrisma.seedPlayers(match.id, [
-      { side: 'A', name: 'Alice', shortName: 'ALI' },
-      { side: 'B', name: 'Bilal', shortName: 'BIL' },
+      { side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+      { side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
     ]);
     mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(1) });
     mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(2) });
@@ -26,7 +26,12 @@ describe('loadMatchState', () => {
 
     expect(state?.match.matchId).toBe(match.id);
     expect(state?.match.players).toHaveLength(2);
-    expect(state?.match.players[0]).toMatchObject({ side: 'A', name: 'Alice', shortName: 'ALI' });
+    expect(state?.match.players[0]).toMatchObject({
+      side: 'A',
+      name: 'Alice',
+      lastName: 'Adams',
+      shortName: 'ALI',
+    });
     expect(state?.derived.currentSet).toMatchObject({ scoreA: 2, scoreB: 0 });
   });
 

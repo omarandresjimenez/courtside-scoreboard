@@ -30,7 +30,14 @@ export type ScoringPresetName = keyof typeof SCORING_PRESETS | 'custom';
 export interface Player {
   playerId: string;
   side: Side;
+  /**
+   * Given name only, for players entered since first/last name were captured
+   * separately. Rows created before that hold the full name here, which is why
+   * `formatPlayerName` still splits it when `lastName` is empty.
+   */
   name: string;
+  /** Family name. Empty for players created before this field existed. */
+  lastName: string;
   /** Used on space-constrained TV layouts. */
   shortName: string;
 }
@@ -72,6 +79,8 @@ export interface Match {
   scoringConfig: ScoringConfig;
   /** Flips true on the first POINT event; locks matchType/scoringConfig edits. */
   scoringLocked: boolean;
+  /** Competition category as announced, e.g. "BS U19". Null when unset. */
+  category?: string | null;
   players: Player[];
   /** Per-side team/country, both optional. */
   teams: Record<Side, TeamIdentity>;
@@ -116,6 +125,8 @@ export interface MatchSummary {
   createdAt: string;
   startedAt?: string | null;
   completedAt?: string | null;
+  /** Competition category as announced, e.g. "BS U19". Null when unset. */
+  category?: string | null;
   players: Player[];
   teams?: Record<Side, TeamIdentity>;
   derived: DerivedMatchSummary;

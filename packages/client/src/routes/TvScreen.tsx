@@ -1,3 +1,4 @@
+import { formatSideNames, formatPlayerName } from '@courtside/shared';
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMatchState } from '../lib/useMatchState.js';
@@ -43,17 +44,13 @@ export function TvScreen() {
     const team = match.teams?.[side];
     return [team?.name, team?.country].filter(Boolean).join(' · ');
   };
-  const playerName = (side: 'A' | 'B') =>
-    match.players
-      .filter((p) => p.side === side)
-      .map((p) => p.name.split(/\s+/)[0] || p.shortName)
-      .join(' / ') || side;
+  const playerName = (side: 'A' | 'B') => formatSideNames(match.players, side);
   const serverPlayer =
     derived.serve.serverPlayerId &&
     match.players.find((player) => player.playerId === derived.serve.serverPlayerId);
   const servingPlayerName = (side: 'A' | 'B') => {
     if (derived.serve.servingSide !== side) return null;
-    return serverPlayer ? serverPlayer.name.split(/\s+/)[0] : playerName(side);
+    return serverPlayer ? formatPlayerName(serverPlayer) : playerName(side);
   };
 
   return (
@@ -61,7 +58,12 @@ export function TvScreen() {
       {isFromCache && <p className="banner">Reconnecting — showing last known score</p>}
 
       <div className="tv-header">
-        <span className="summary-pill">{match.matchType}</span>
+        {/* The category already states the discipline — "MS U19" is men's
+            singles — so it replaces the singles/doubles pill rather than
+            sitting beside it repeating the same fact. */}
+        <span className={`summary-pill${match.category ? ' category-pill' : ''}`}>
+          {match.category ?? match.matchType}
+        </span>
         <span className="summary-pill">{match.courtLabel ?? 'Court'}</span>
         <time className="summary-pill">
           {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

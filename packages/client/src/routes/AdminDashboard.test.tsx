@@ -18,8 +18,8 @@ const sampleMatches: MatchSummary[] = [
     createdAt: '2026-08-29T10:00:00.000Z',
     teams: { A: { name: null, country: null }, B: { name: null, country: null } },
     players: [
-      { playerId: 'a1', side: 'A', name: 'Alice', shortName: 'ALI' },
-      { playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' },
+      { playerId: 'a1', side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+      { playerId: 'b1', side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
     ],
     derived: {
       sets: [{ setNumber: 1, scoreA: 0, scoreB: 0, winner: null }],
@@ -253,8 +253,8 @@ describe('AdminDashboard', () => {
       assignedCourtId: 'c1',
       courtLabel: 'Court 1',
       players: [
-        { playerId: 'a1', side: 'A', name: 'Alice', shortName: 'ALI' },
-        { playerId: 'b1', side: 'B', name: 'Bilal', shortName: 'BIL' },
+        { playerId: 'a1', side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+        { playerId: 'b1', side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
       ],
       startedAt: '2026-08-29T10:00:00.000Z',
       completedAt: '2026-08-29T10:02:30.000Z',
@@ -284,8 +284,8 @@ describe('AdminDashboard', () => {
 
     render(<AdminDashboard />);
 
-    expect(await screen.findByText('Alice', { selector: 'strong' })).toBeInTheDocument();
-    expect(screen.getByText('Bilal', { selector: 'strong' })).toBeInTheDocument();
+    expect(await screen.findByText('A. Adams', { selector: 'strong' })).toBeInTheDocument();
+    expect(screen.getByText('B. Bruno', { selector: 'strong' })).toBeInTheDocument();
     expect(screen.getByText('Finalized')).toBeInTheDocument();
     expect(document.querySelector('.history-list')).toHaveTextContent('2 min 30 sec');
     expect(screen.getByText('21')).toHaveClass('set-score-winner');
@@ -313,9 +313,9 @@ describe('AdminDashboard', () => {
     );
     expect(document.querySelector('.history-list')).toHaveTextContent('Court 1');
     expect(document.querySelector('.history-scoreboard')).toBeInTheDocument();
-    expect(screen.getByText('Alice', { selector: 'strong' }).closest('.tv-player-row')).toHaveClass(
-      'match-winner',
-    );
+    expect(
+      screen.getByText('A. Adams', { selector: 'strong' }).closest('.tv-player-row'),
+    ).toHaveClass('match-winner');
     expect(screen.getAllByText('21')).toHaveLength(2);
     expect(screen.getAllByText('21')[0]).toHaveClass('set-score-winner');
     expect(screen.getAllByText('21')[1]).toHaveClass('set-score-winner');
@@ -376,7 +376,7 @@ describe('AdminDashboard', () => {
   it('falls back to no court label when the hydrated match state omits one', async () => {
     const fullState = sampleCreatedMatch({
       assignedCourtId: 'c1',
-      players: [{ playerId: 'a1', side: 'A', name: 'Solo', shortName: 'SOL' }],
+      players: [{ playerId: 'a1', side: 'A', name: 'Solo', lastName: 'Olos', shortName: 'SOL' }],
     });
     fullState.derived = { sets: [], setsWon: { A: 0, B: 0 }, matchWinner: null };
     mockFetchRoutes({
@@ -572,7 +572,7 @@ describe('AdminDashboard', () => {
 
     it('creates a court with the entered label and refreshes the list', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByPlaceholderText('Court label (e.g. Court 1)'), 'Court 2');
+      await userEvent.type(screen.getByLabelText('Court label'), 'Court 2');
       mockFetchRoutes({
         postCourts: jsonResponse({ courtId: 'c2', label: 'Court 2', currentMatchId: null }),
       });
@@ -588,12 +588,12 @@ describe('AdminDashboard', () => {
           }),
         ),
       );
-      expect(screen.getByPlaceholderText('Court label (e.g. Court 1)')).toHaveValue('');
+      expect(screen.getByLabelText('Court label')).toHaveValue('');
     });
 
     it('shows the server error message when court creation fails', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByPlaceholderText('Court label (e.g. Court 1)'), 'Court 2');
+      await userEvent.type(screen.getByLabelText('Court label'), 'Court 2');
       mockFetchRoutes({ postCourts: jsonResponse({ error: 'A court label is required.' }, false) });
 
       await userEvent.click(screen.getByRole('button', { name: 'Add court' }));
@@ -603,7 +603,7 @@ describe('AdminDashboard', () => {
 
     it('falls back to a generic message when a failed court creation has no error field', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByPlaceholderText('Court label (e.g. Court 1)'), 'Court 2');
+      await userEvent.type(screen.getByLabelText('Court label'), 'Court 2');
       mockFetchRoutes({ postCourts: jsonResponse({}, false) });
 
       await userEvent.click(screen.getByRole('button', { name: 'Add court' }));
@@ -647,7 +647,7 @@ describe('AdminDashboard', () => {
 
     it('creates an umpire with the entered name and refreshes the list', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByPlaceholderText('Name Lastname'), 'Uma Umpire');
+      await userEvent.type(screen.getByLabelText('Umpire name'), 'Uma Umpire');
       mockFetchRoutes({ postUmpires: jsonResponse(sampleUmpires[0]) });
 
       await userEvent.click(screen.getByRole('button', { name: 'Add umpire' }));
@@ -661,12 +661,12 @@ describe('AdminDashboard', () => {
           }),
         ),
       );
-      expect(screen.getByPlaceholderText('Name Lastname')).toHaveValue('');
+      expect(screen.getByLabelText('Umpire name')).toHaveValue('');
     });
 
     it('shows the server error message when umpire creation fails', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByPlaceholderText('Name Lastname'), 'Uma Umpire');
+      await userEvent.type(screen.getByLabelText('Umpire name'), 'Uma Umpire');
       mockFetchRoutes({
         postUmpires: jsonResponse({ error: 'An umpire name is required.' }, false),
       });
@@ -678,7 +678,7 @@ describe('AdminDashboard', () => {
 
     it('falls back to a generic message when a failed umpire creation has no error field', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByPlaceholderText('Name Lastname'), 'Uma Umpire');
+      await userEvent.type(screen.getByLabelText('Umpire name'), 'Uma Umpire');
       mockFetchRoutes({ postUmpires: jsonResponse({}, false) });
 
       await userEvent.click(screen.getByRole('button', { name: 'Add umpire' }));
@@ -737,12 +737,118 @@ describe('AdminDashboard', () => {
     });
   });
 
+  /** First and family name are separate inputs now; every test needs both. */
+  async function fillPlayer(legend: string, first: string, last: string) {
+    await userEvent.type(screen.getByLabelText(`${legend} first name`), first);
+    await userEvent.type(screen.getByLabelText(`${legend} last name`), last);
+  }
+
   describe('creating a match', () => {
+    it('sends the category the admin typed, and keeps it for the next match', async () => {
+      render(<AdminDashboard />);
+      await selectCourt();
+      await userEvent.type(screen.getByLabelText('Category'), 'BS U19');
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      await waitFor(() =>
+        expect(global.fetch).toHaveBeenCalledWith(
+          '/api/matches',
+          expect.objectContaining({
+            body: expect.stringContaining('"category":"BS U19"'),
+          }),
+        ),
+      );
+      // A session usually enters a run of matches in one category, so this
+      // field deliberately survives the reset that clears the names.
+      expect(screen.getByLabelText('Category')).toHaveValue('BS U19');
+    });
+
+    it('omits the category entirely when left blank', async () => {
+      render(<AdminDashboard />);
+      await selectCourt();
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+      const body = (global.fetch as jest.Mock).mock.calls.find((c) => c[0] === '/api/matches')?.[1]
+        ?.body as string;
+      expect(body).not.toContain('category');
+    });
+
+    it('groups the form so section, group and field titles are distinguishable', () => {
+      render(<AdminDashboard />);
+
+      // Three levels of heading, not one flat list of look-alike labels.
+      expect(screen.getByRole('heading', { name: 'Create match' })).toBeInTheDocument();
+      ['Format', 'Assignment', 'Sides', 'Players'].forEach((group) =>
+        expect(screen.getByRole('group', { name: group })).toBeInTheDocument(),
+      );
+    });
+
+    it('describes the category field without polluting its accessible name', () => {
+      render(<AdminDashboard />);
+      const input = screen.getByLabelText('Category');
+
+      // Hint text inside the <label> would be read out on every focus.
+      expect(input).toHaveAccessibleName('Category');
+      expect(input).toHaveAccessibleDescription(/Free text/);
+    });
+
+    it('offers category suggestions while still accepting anything typed', async () => {
+      render(<AdminDashboard />);
+      const input = screen.getByLabelText('Category');
+
+      expect(input).toHaveAttribute('list', 'category-suggestions');
+      // Free text: a value outside the suggestions must survive.
+      await userEvent.type(input, 'Veterans 40+ Mixed');
+      expect(input).toHaveValue('Veterans 40+ Mixed');
+    });
+
+    it('keeps browser autofill out of player and category fields', () => {
+      render(<AdminDashboard />);
+
+      // These are other people's names; autofill would offer the operator's own.
+      [
+        screen.getByLabelText('Side A player 1 first name'),
+        screen.getByLabelText('Side A player 1 last name'),
+        screen.getByLabelText('Category'),
+      ].forEach((el) => {
+        expect(el).toHaveAttribute('autocomplete', 'off');
+        expect(el).toHaveAttribute('spellcheck', 'false');
+      });
+    });
+
+    it('marks the submit busy and blocks a double submit while creating', async () => {
+      render(<AdminDashboard />);
+      await selectCourt();
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
+
+      let release: (v: unknown) => void = () => {};
+      (global.fetch as jest.Mock).mockImplementationOnce(() => new Promise((r) => (release = r)));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      const busy = await screen.findByRole('button', { name: 'Creating…' });
+      expect(busy).toBeDisabled();
+      expect(busy).toHaveAttribute('aria-busy', 'true');
+
+      release(jsonResponse(sampleCreatedMatch({ matchId: 'm-busy' })));
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Create match' })).toBeEnabled(),
+      );
+    });
+
     it('creates a singles match with the entered names and standard preset by default', async () => {
       render(<AdminDashboard />);
       await selectCourt();
-      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
 
       await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
 
@@ -755,8 +861,8 @@ describe('AdminDashboard', () => {
             body: JSON.stringify({
               matchType: 'singles',
               players: [
-                { side: 'A', name: 'Alice' },
-                { side: 'B', name: 'Bilal' },
+                { side: 'A', name: 'Alice', lastName: 'Adams' },
+                { side: 'B', name: 'Bilal', lastName: 'Bruno' },
               ],
               scoringConfig: { pointsToWin: 21, capScore: 30, intervalAt: 11 },
               courtId: 'c1',
@@ -771,14 +877,14 @@ describe('AdminDashboard', () => {
         ),
       );
       expect(await screen.findByText('Match created.')).toBeInTheDocument();
-      expect(screen.getByPlaceholderText('Side A player 1')).toHaveValue('');
+      expect(screen.getByLabelText('Side A player 1 first name')).toHaveValue('');
     });
 
     it('shows the umpire link once, built from the created match id and token', async () => {
       render(<AdminDashboard />);
       await selectCourt();
-      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
       mockFetchRoutes({
         postMatches: jsonResponse(
           sampleCreatedMatch({ matchId: 'm-42', umpireToken: 'secret-tok', umpireCode: 'M42CODE' }),
@@ -811,8 +917,8 @@ describe('AdminDashboard', () => {
     it('renders a scannable QR code for the umpire link beside the join code', async () => {
       render(<AdminDashboard />);
       await selectCourt();
-      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
       mockFetchRoutes({
         postMatches: jsonResponse(
           sampleCreatedMatch({ matchId: 'm-42', umpireToken: 'secret-tok', umpireCode: 'M42CODE' }),
@@ -834,8 +940,8 @@ describe('AdminDashboard', () => {
     it('encodes the umpire link itself, not some other value', async () => {
       render(<AdminDashboard />);
       await selectCourt();
-      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
       mockFetchRoutes({
         postMatches: jsonResponse(
           sampleCreatedMatch({ matchId: 'm-42', umpireToken: 'secret-tok' }),
@@ -881,8 +987,8 @@ describe('AdminDashboard', () => {
     it('sends the team names and countries the admin typed', async () => {
       render(<AdminDashboard />);
       await selectCourt();
-      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
       const teamInputs = screen.getAllByLabelText('Team');
       const countryInputs = screen.getAllByLabelText('Country');
       await userEvent.type(teamInputs[0]!, 'Riverside');
@@ -946,8 +1052,8 @@ describe('AdminDashboard', () => {
     it('uses the court label returned directly on the created match, when present', async () => {
       render(<AdminDashboard />);
       await selectCourt();
-      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
       mockFetchRoutes({
         postMatches: jsonResponse(sampleCreatedMatch({ courtLabel: 'Center Court' })),
       });
@@ -964,8 +1070,8 @@ describe('AdminDashboard', () => {
       await screen.findByText('Court 1', { selector: 'span' });
       await userEvent.selectOptions(screen.getByLabelText('Court'), 'c1');
       await userEvent.selectOptions(screen.getByLabelText('Umpire'), 'u1');
-      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
 
       await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
 
@@ -981,8 +1087,8 @@ describe('AdminDashboard', () => {
 
     it('does not submit a match until a court is selected', async () => {
       render(<AdminDashboard />);
-      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
 
       await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
 
@@ -998,13 +1104,13 @@ describe('AdminDashboard', () => {
       await selectCourt();
       await userEvent.selectOptions(screen.getByLabelText('Match type'), 'doubles');
 
-      expect(screen.getByPlaceholderText('Side A player 2')).toBeInTheDocument();
-      expect(screen.getByPlaceholderText('Side B player 2')).toBeInTheDocument();
+      expect(screen.getByLabelText('Side A player 2 first name')).toBeInTheDocument();
+      expect(screen.getByLabelText('Side B player 2 first name')).toBeInTheDocument();
 
-      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'A1');
-      await userEvent.type(screen.getByPlaceholderText('Side A player 2'), 'A2');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'B1');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 2'), 'B2');
+      await fillPlayer('Side A player 1', 'A1', '1a');
+      await fillPlayer('Side A player 2', 'A2', '2a');
+      await fillPlayer('Side B player 1', 'B1', '1b');
+      await fillPlayer('Side B player 2', 'B2', '2b');
 
       await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
 
@@ -1023,8 +1129,8 @@ describe('AdminDashboard', () => {
       render(<AdminDashboard />);
       await selectCourt();
       await userEvent.selectOptions(screen.getByLabelText('Scoring format'), 'short');
-      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
 
       await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
 
@@ -1042,8 +1148,8 @@ describe('AdminDashboard', () => {
     it('shows the server error message when creation fails', async () => {
       render(<AdminDashboard />);
       await selectCourt();
-      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
       mockFetchRoutes({ postMatches: jsonResponse({ error: 'Scoring is locked.' }, false) });
 
       await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
@@ -1054,8 +1160,8 @@ describe('AdminDashboard', () => {
     it('falls back to a generic message when a failed creation has no error field', async () => {
       render(<AdminDashboard />);
       await selectCourt();
-      await userEvent.type(screen.getByPlaceholderText('Side A player 1'), 'Alice');
-      await userEvent.type(screen.getByPlaceholderText('Side B player 1'), 'Bilal');
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
       mockFetchRoutes({ postMatches: jsonResponse({}, false) });
 
       await userEvent.click(screen.getByRole('button', { name: 'Create match' }));

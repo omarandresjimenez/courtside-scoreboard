@@ -126,7 +126,16 @@ describe('toPublicScoreboard', () => {
     matchType: 'singles',
     status: 'IN_PROGRESS',
     courtLabel: 'Court 1',
-    players: [{ playerId: 'a1', side: 'A', name: 'Alice', shortName: 'ALI', email: 'a@b.c' }],
+    players: [
+      {
+        playerId: 'a1',
+        side: 'A',
+        name: 'Alice',
+        lastName: 'Adams',
+        shortName: 'ALI',
+        email: 'a@b.c',
+      },
+    ],
     teams: { A: { name: null } },
     startedAt: '2026-01-01T00:00:00.000Z',
     completedAt: null,
@@ -151,7 +160,7 @@ describe('toPublicScoreboard', () => {
     const result = (await loadModule()).toPublicScoreboard({ match: rawMatch, derived: {} });
 
     expect(result.players).toEqual([
-      { playerId: 'a1', side: 'A', name: 'Alice', shortName: 'ALI' },
+      { playerId: 'a1', side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
     ]);
     expect(JSON.stringify(result)).not.toContain('a@b.c');
   });
@@ -179,6 +188,7 @@ describe('toPublicScoreboard', () => {
       matchType: '',
       status: '',
       courtLabel: null,
+      category: null,
       players: [],
       teams: null,
       startedAt: null,
@@ -194,6 +204,7 @@ describe('syncScoreToCloud', () => {
     matchType: 'singles',
     status: 'IN_PROGRESS',
     courtLabel: 'Court 1',
+    category: null,
     players: [],
     teams: null,
     startedAt: null,

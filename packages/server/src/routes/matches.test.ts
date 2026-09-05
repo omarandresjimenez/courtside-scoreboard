@@ -90,7 +90,7 @@ describe('POST /api/matches', () => {
       .send({
         ...validSinglesBody,
         players: [
-          { side: 'A', name: 'Alice', shortName: 'AA' },
+          { side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'AA' },
           { side: 'B', name: 'Bilal' },
         ],
       });
@@ -322,12 +322,92 @@ describe('GET /api/matches/:matchId', () => {
 
   it('returns the match state for a known match, without auth', async () => {
     const match = mockPrisma.seedMatch();
-    mockPrisma.seedPlayers(match.id, [{ side: 'A', name: 'Solo', shortName: 'SOL' }]);
+    mockPrisma.seedPlayers(match.id, [
+      { side: 'A', name: 'Solo', lastName: 'Olos', shortName: 'SOL' },
+    ]);
 
     const response = await request(buildApp()).get(`/api/matches/${match.id}`);
 
     expect(response.status).toBe(200);
     expect(response.body.match.matchId).toBe(match.id);
+  });
+});
+
+describe('POST /api/matches — category and family names', () => {
+  const withPlayers = (players: unknown, category?: string) => ({
+    ...validSinglesBody,
+    ...(category === undefined ? {} : { category }),
+    players,
+  });
+
+  it('stores the category and the family name', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(
+        withPlayers(
+          [
+            { side: 'A', name: 'Juan', lastName: 'Pérez' },
+            { side: 'B', name: 'Carlos', lastName: 'Ramos' },
+          ],
+          'BS U19',
+        ),
+      );
+
+    expect(response.status).toBe(201);
+    expect(response.body.match.category).toBe('BS U19');
+    const players = response.body.match.players as Array<{ lastName: string }>;
+    expect(players.map((p) => p.lastName).sort()).toEqual(['Pérez', 'Ramos']);
+  });
+
+  it('treats a blank category as none rather than an empty string', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(
+        withPlayers(
+          [
+            { side: 'A', name: 'Juan', lastName: 'Pérez' },
+            { side: 'B', name: 'Carlos', lastName: 'Ramos' },
+          ],
+          '   ',
+        ),
+      );
+
+    expect(response.status).toBe(201);
+    expect(response.body.match.category).toBeNull();
+  });
+
+  it('derives the short name from the family name, which disambiguates on a TV wall', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(
+        withPlayers([
+          { side: 'A', name: 'Juan', lastName: 'Pérez' },
+          { side: 'B', name: 'Juan', lastName: 'Ramos' },
+        ]),
+      );
+
+    const players = response.body.match.players as Array<{ shortName: string }>;
+    // Two players called Juan must not both render as "JUA".
+    expect(new Set(players.map((p) => p.shortName)).size).toBe(2);
+  });
+
+  it('still accepts a player with no family name, as older clients send', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(
+        withPlayers([
+          { side: 'A', name: 'Alice Adams' },
+          { side: 'B', name: 'Bilal Bruno' },
+        ]),
+      );
+
+    expect(response.status).toBe(201);
+    const players = response.body.match.players as Array<{ lastName: string }>;
+    expect(players.every((p) => p.lastName === '')).toBe(true);
   });
 });
 

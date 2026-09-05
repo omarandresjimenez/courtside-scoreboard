@@ -66,10 +66,12 @@ export async function loadMatchState(matchId: string): Promise<MatchStatePayload
     status: record.status as Match['status'],
     scoringConfig,
     scoringLocked: record.scoringLocked,
+    category: record.category,
     players: record.players.map((p) => ({
       playerId: p.id,
       side: p.side as Side,
       name: p.name,
+      lastName: p.lastName,
       shortName: p.shortName,
     })),
     teams: {

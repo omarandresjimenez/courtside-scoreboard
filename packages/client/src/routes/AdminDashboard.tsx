@@ -5,6 +5,7 @@ import {
   type Match,
   type MatchStatePayload,
   type MatchSummary,
+  formatSideNames,
   type MatchType,
   type Side,
   type ScoringPresetName,
@@ -51,6 +52,7 @@ function summaryFromMatchState(state: MatchStatePayload): MatchSummary {
     createdAt: state.match.createdAt,
     startedAt: state.match.startedAt,
     completedAt: state.match.completedAt,
+    category: state.match.category ?? null,
     players: state.match.players,
     derived: {
       sets: state.derived.sets.map(({ setNumber, scoreA, scoreB, winner }) => ({
@@ -168,7 +170,18 @@ export function AdminDashboard() {
   const [umpires, setUmpires] = useState<Umpire[]>([]);
   const [matchType, setMatchType] = useState<MatchType>('singles');
   const [preset, setPreset] = useState<ScoringPresetName>('standard');
-  const [names, setNames] = useState({ a1: '', a2: '', b1: '', b2: '' });
+  // First and family name are captured separately: scoreboards render
+  // "J. Pérez", which cannot be derived reliably from one free-text field
+  // (compound family names, and given names that are two words).
+  const [names, setNames] = useState({
+    a1: { first: '', last: '' },
+    a2: { first: '', last: '' },
+    b1: { first: '', last: '' },
+    b2: { first: '', last: '' },
+  });
+  const [category, setCategory] = useState('');
+  /** Guards a double submit and drives the button's busy state. */
+  const [isCreating, setIsCreating] = useState(false);
   const [courtId, setCourtId] = useState('');
   const [umpireId, setUmpireId] = useState('');
   const [newUmpireName, setNewUmpireName] = useState('');
@@ -332,21 +345,30 @@ export function AdminDashboard() {
 
   async function createMatch(e: React.FormEvent) {
     e.preventDefault();
+    if (isCreating) return;
     setStatus(null);
     setLastCreated(null);
+    setIsCreating(true);
+    try {
+      await submitMatch();
+    } finally {
+      // Always clears, so a failed create leaves the form usable rather than
+      // stuck behind a permanently disabled button.
+      setIsCreating(false);
+    }
+  }
+
+  async function submitMatch() {
+    const slot = (side: 'A' | 'B', key: keyof typeof names) => ({
+      side,
+      name: names[key].first.trim(),
+      lastName: names[key].last.trim(),
+    });
 
     const players =
       matchType === 'singles'
-        ? [
-            { side: 'A' as const, name: names.a1 },
-            { side: 'B' as const, name: names.b1 },
-          ]
-        : [
-            { side: 'A' as const, name: names.a1 },
-            { side: 'A' as const, name: names.a2 },
-            { side: 'B' as const, name: names.b1 },
-            { side: 'B' as const, name: names.b2 },
-          ];
+        ? [slot('A', 'a1'), slot('B', 'b1')]
+        : [slot('A', 'a1'), slot('A', 'a2'), slot('B', 'b1'), slot('B', 'b2')];
 
     const res = await fetch('/api/matches', {
       method: 'POST',
@@ -364,6 +386,7 @@ export function AdminDashboard() {
         umpireId,
         tournamentId,
         teams,
+        category: category.trim() || undefined,
       }),
     });
 
@@ -389,8 +412,16 @@ export function AdminDashboard() {
       streamBroadcastLink: streamBroadcastLinkFor(created.match),
       streamViewLink: streamViewLinkFor(created.match),
     });
-    setNames({ a1: '', a2: '', b1: '', b2: '' });
+    setNames({
+      a1: { first: '', last: '' },
+      a2: { first: '', last: '' },
+      b1: { first: '', last: '' },
+      b2: { first: '', last: '' },
+    });
     setTeams({ A: { name: '', country: '' }, B: { name: '', country: '' } });
+    // Category deliberately survives: a session usually enters a run of
+    // matches in the same category, and retyping "BS U19" every time is a
+    // needless step.
     void refreshMatches();
     void refreshCourts();
   }
@@ -421,16 +452,28 @@ export function AdminDashboard() {
           <div className="admin-column">
             <section className="admin-card">
               <h2>Courts</h2>
+              <p className="section-hint">
+                Courts hold the TV and public links, and a match is assigned to one.
+              </p>
               <form onSubmit={createCourt}>
                 <fieldset>
-                  <input
-                    aria-label="Court label"
-                    placeholder="Court label (e.g. Court 1)"
-                    value={newCourtLabel}
-                    onChange={(e) => setNewCourtLabel(e.target.value)}
-                    required
-                  />
-                  <button type="submit">Add court</button>
+                  <label>
+                    Court name
+                    <input
+                      aria-label="Court label"
+                      placeholder="e.g. Court 1…"
+                      value={newCourtLabel}
+                      onChange={(e) => setNewCourtLabel(e.target.value)}
+                      /* A venue's court names are not the browser's to guess,
+                         and offering a saved-password prompt here is noise. */
+                      autoComplete="off"
+                      spellCheck={false}
+                      required
+                    />
+                  </label>
+                  <div className="form-actions">
+                    <button type="submit">Add court</button>
+                  </div>
                 </fieldset>
               </form>
 
@@ -506,16 +549,26 @@ export function AdminDashboard() {
 
             <section className="admin-card">
               <h2>Umpires</h2>
+              <p className="section-hint">
+                An umpire can only be assigned to one live match at a time.
+              </p>
               <form onSubmit={createUmpire}>
                 <fieldset>
-                  <input
-                    aria-label="Umpire name"
-                    placeholder="Name Lastname"
-                    value={newUmpireName}
-                    onChange={(e) => setNewUmpireName(e.target.value)}
-                    required
-                  />
-                  <button type="submit">Add umpire</button>
+                  <label>
+                    Umpire name
+                    <input
+                      aria-label="Umpire name"
+                      placeholder="e.g. Ana Gómez…"
+                      value={newUmpireName}
+                      onChange={(e) => setNewUmpireName(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                      required
+                    />
+                  </label>
+                  <div className="form-actions">
+                    <button type="submit">Add umpire</button>
+                  </div>
                 </fieldset>
               </form>
 
@@ -549,31 +602,72 @@ export function AdminDashboard() {
           </div>
 
           <section className="admin-card">
-            <form onSubmit={createMatch}>
+            <h2>Create match</h2>
+            <p className="section-hint">
+              The umpire link is shown once after creating, so keep this tab open.
+            </p>
+            <form onSubmit={createMatch} className="admin-form">
               <fieldset>
-                <legend>Create match</legend>
+                <legend>Format</legend>
+
+                <div className="field-row">
+                  <label>
+                    Match type
+                    <select
+                      value={matchType}
+                      onChange={(e) => setMatchType(e.target.value as MatchType)}
+                    >
+                      <option value="singles">Singles</option>
+                      <option value="doubles">Doubles</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    Scoring format
+                    <select
+                      value={preset}
+                      onChange={(e) => setPreset(e.target.value as ScoringPresetName)}
+                    >
+                      <option value="standard">Standard (21 / 30 / 11)</option>
+                      <option value="short">Short (15 / 21 / 8)</option>
+                    </select>
+                  </label>
+                </div>
 
                 <label>
-                  Match type
-                  <select
-                    value={matchType}
-                    onChange={(e) => setMatchType(e.target.value as MatchType)}
-                  >
-                    <option value="singles">Singles</option>
-                    <option value="doubles">Doubles</option>
-                  </select>
+                  Category
+                  <input
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    placeholder="e.g. MS U19…"
+                    list="category-suggestions"
+                    autoComplete="off"
+                    spellCheck={false}
+                    /* Described by, not labelled by: hint text inside the
+                       <label> becomes part of the control's accessible name,
+                       so a screen reader would announce the whole sentence
+                       every time the field is focused. */
+                    aria-describedby="category-hint"
+                  />
                 </label>
+                <p className="field-hint" id="category-hint">
+                  Free text. Shown on the TV, umpire and viewer screens in place of
+                  “singles”/“doubles”, which it already implies.
+                </p>
+                {/* Suggestions, not a closed list: category codes vary by
+                    federation and age group, so anything fixed would be wrong
+                    somewhere. */}
+                <datalist id="category-suggestions">
+                  {['MS U19', 'WS U19', 'MD U19', 'WD U19', 'XD U19', 'MS U15', 'WS U15'].map(
+                    (c) => (
+                      <option key={c} value={c} />
+                    ),
+                  )}
+                </datalist>
+              </fieldset>
 
-                <label>
-                  Scoring format
-                  <select
-                    value={preset}
-                    onChange={(e) => setPreset(e.target.value as ScoringPresetName)}
-                  >
-                    <option value="standard">Standard (21 / 30 / 11)</option>
-                    <option value="short">Short (15 / 21 / 8)</option>
-                  </select>
-                </label>
+              <fieldset>
+                <legend>Assignment</legend>
 
                 <label>
                   Court
@@ -606,6 +700,13 @@ export function AdminDashboard() {
                     })}
                   </select>
                 </label>
+              </fieldset>
+
+              <fieldset>
+                <legend>Sides</legend>
+                <p className="field-hint">
+                  Team and country are optional — club play usually has neither.
+                </p>
                 <div className="match-team-fields">
                   {(['A', 'B'] as const).map((side) => (
                     <fieldset key={side} className={`team-fieldset side-${side.toLowerCase()}`}>
@@ -620,7 +721,9 @@ export function AdminDashboard() {
                               [side]: { ...current[side], name: e.target.value },
                             }))
                           }
-                          placeholder="Optional"
+                          placeholder="Optional…"
+                          autoComplete="off"
+                          spellCheck={false}
                         />
                       </label>
                       <label>
@@ -633,58 +736,80 @@ export function AdminDashboard() {
                               [side]: { ...current[side], country: e.target.value },
                             }))
                           }
-                          placeholder="Optional"
+                          placeholder="Optional…"
+                          autoComplete="off"
+                          spellCheck={false}
                         />
                       </label>
                     </fieldset>
                   ))}
                 </div>
-
-                <div className="match-player-fields">
-                  <label>
-                    Side A player 1
-                    <input
-                      placeholder="Side A player 1"
-                      value={names.a1}
-                      onChange={(e) => setNames({ ...names, a1: e.target.value })}
-                      required
-                    />
-                  </label>
-                  <label>
-                    Side B player 1
-                    <input
-                      placeholder="Side B player 1"
-                      value={names.b1}
-                      onChange={(e) => setNames({ ...names, b1: e.target.value })}
-                      required
-                    />
-                  </label>
-                  {matchType === 'doubles' && (
-                    <>
-                      <label>
-                        Side A player 2
-                        <input
-                          placeholder="Side A player 2"
-                          value={names.a2}
-                          onChange={(e) => setNames({ ...names, a2: e.target.value })}
-                          required
-                        />
-                      </label>
-                      <label>
-                        Side B player 2
-                        <input
-                          placeholder="Side B player 2"
-                          value={names.b2}
-                          onChange={(e) => setNames({ ...names, b2: e.target.value })}
-                          required
-                        />
-                      </label>
-                    </>
-                  )}
-                </div>
-
-                <button type="submit">Create match</button>
               </fieldset>
+
+              <fieldset>
+                <legend>Players</legend>
+                <div className="match-player-fields">
+                  {(
+                    [
+                      ['a1', 'Side A player 1'],
+                      ['b1', 'Side B player 1'],
+                      ['a2', 'Side A player 2'],
+                      ['b2', 'Side B player 2'],
+                    ] as const
+                  )
+                    .filter(([key]) => matchType === 'doubles' || !key.endsWith('2'))
+                    .map(([key, legend]) => (
+                      <fieldset key={key} className="player-fieldset">
+                        <legend>{legend}</legend>
+                        {/* Wrapper, not the fieldset itself: a flex/grid
+                            fieldset turns its legend into a layout item and
+                            pulls it out of the border gap. */}
+                        <div className="field-row">
+                          <label>
+                            First name
+                            <input
+                              aria-label={`${legend} first name`}
+                              value={names[key].first}
+                              onChange={(e) =>
+                                setNames((current) => ({
+                                  ...current,
+                                  [key]: { ...current[key], first: e.target.value },
+                                }))
+                              }
+                              /* Not the operator's own name, so browser autofill
+                               would offer the wrong person entirely. */
+                              autoComplete="off"
+                              spellCheck={false}
+                              required
+                            />
+                          </label>
+                          <label>
+                            Last name
+                            <input
+                              aria-label={`${legend} last name`}
+                              value={names[key].last}
+                              onChange={(e) =>
+                                setNames((current) => ({
+                                  ...current,
+                                  [key]: { ...current[key], last: e.target.value },
+                                }))
+                              }
+                              autoComplete="off"
+                              spellCheck={false}
+                              required
+                            />
+                          </label>
+                        </div>
+                      </fieldset>
+                    ))}
+                </div>
+              </fieldset>
+
+              <div className="form-actions">
+                <button type="submit" aria-busy={isCreating} disabled={isCreating}>
+                  {isCreating ? 'Creating…' : 'Create match'}
+                </button>
+              </div>
             </form>
 
             {lastCreated && (
@@ -817,6 +942,7 @@ export function AdminDashboard() {
                     <li key={m.matchId}>
                       <div className="history-topline">
                         <strong>{m.matchType}</strong>
+                        {m.category && <span className="category-tag">{m.category}</span>}
                         <span className="status-tag">{displayStatus(m)}</span>
                       </div>
                       <small>
@@ -838,17 +964,14 @@ export function AdminDashboard() {
                           ))}
                         </div>
                         {(['A', 'B'] as const).map((side) => {
-                          const names = m.players
-                            .filter((player) => player.side === side)
-                            .map((player) => player.name)
-                            .join(' / ');
+                          const names = formatSideNames(m.players, side, `Side ${side}`);
                           return (
                             <div
                               className={`tv-player-row side-${side.toLowerCase()}${m.derived.matchWinner === side ? ' match-winner' : ''}`}
                               key={side}
                             >
                               <strong className="tv-player-name">
-                                {names || `Side ${side}`}
+                                {names}
                                 {m.derived.retiredSide === side && (
                                   <span className="retired-tag">Retired</span>
                                 )}
