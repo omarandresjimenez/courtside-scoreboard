@@ -19,6 +19,7 @@ import { copyToClipboard } from '../lib/clipboard.js';
 import { PlayerAutocomplete, type PlayerSelection } from '../lib/PlayerAutocomplete.js';
 import { useTranslation, type Translation } from '../i18n/useTranslation.js';
 import { LOCALE_NAMES, SUPPORTED_LOCALES, type Locale } from '../i18n/locale.js';
+import { useTheme, type Theme } from '../theme/useTheme.js';
 
 /** The four player slots a match form ever has — singles uses only a1/b1. */
 type PlayerSlot = 'a1' | 'a2' | 'b1' | 'b2';
@@ -215,6 +216,7 @@ function streamBroadcastLinkFor(court: Pick<Court, 'courtId'>, mdnsHost: string 
  */
 export function AdminDashboard() {
   const { t, locale, setLocale } = useTranslation();
+  const { theme, setTheme } = useTheme();
   const tournamentId =
     new URLSearchParams(window.location.search).get('tournamentId') ??
     localStorage.getItem('courtside:tournamentId') ??
@@ -284,6 +286,19 @@ export function AdminDashboard() {
   useEffect(() => {
     localStorage.setItem('courtside:adminPassword', adminPassword);
   }, [adminPassword]);
+
+  // On `document.body` rather than just this component's own root element:
+  // the light-theme CSS overrides (see styles.css) need to repaint the
+  // whole page background, which lives on `body`, not something inside it.
+  // Removed on unmount so this stays admin-only — any other screen opened
+  // afterwards in the same tab (TV, umpire, ...) starts clean rather than
+  // inheriting whatever this admin session last had set.
+  useEffect(() => {
+    document.body.dataset.theme = theme;
+    return () => {
+      delete document.body.dataset.theme;
+    };
+  }, [theme]);
 
   useEffect(() => {
     // Public and unauthenticated — no admin password needed, so this can
@@ -639,19 +654,31 @@ export function AdminDashboard() {
         <h1>
           {tournamentName || t('header.defaultTournamentName')} {t('header.titleSuffix')}
         </h1>
-        {/* Defaults to the browser/system language (falling back to
-            English), but an explicit pick here overrides that from now on
-            — see useTranslation's stored-preference logic. */}
-        <label className="language-switcher">
-          {t('header.languageLabel')}
-          <select value={locale} onChange={(e) => setLocale(e.target.value as Locale)}>
-            {SUPPORTED_LOCALES.map((code) => (
-              <option key={code} value={code}>
-                {LOCALE_NAMES[code]}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="admin-header-controls">
+          {/* Defaults to the browser/system language (falling back to
+              English), but an explicit pick here overrides that from now on
+              — see useTranslation's stored-preference logic. */}
+          <label className="language-switcher">
+            {t('header.languageLabel')}
+            <select value={locale} onChange={(e) => setLocale(e.target.value as Locale)}>
+              {SUPPORTED_LOCALES.map((code) => (
+                <option key={code} value={code}>
+                  {LOCALE_NAMES[code]}
+                </option>
+              ))}
+            </select>
+          </label>
+          {/* Admin-dashboard-only — see useTheme. Defaults to dark; an
+              explicit pick here is remembered from now on, the same way
+              the language choice is. */}
+          <label className="language-switcher">
+            {t('header.themeLabel')}
+            <select value={theme} onChange={(e) => setTheme(e.target.value as Theme)}>
+              <option value="dark">{t('header.themeDark')}</option>
+              <option value="light">{t('header.themeLight')}</option>
+            </select>
+          </label>
+        </div>
       </div>
       {tournamentDate && (
         <p className="tournament-date">{new Date(tournamentDate).toLocaleDateString()}</p>

@@ -17,6 +17,9 @@ const es = {
     titleSuffix: '— Administración',
     noTournamentSelected: 'Selecciona un torneo primero en el lanzador de escritorio.',
     languageLabel: 'Idioma',
+    themeLabel: 'Tema',
+    themeDark: 'Oscuro',
+    themeLight: 'Claro',
   },
   clipboard: {
     copied: 'Enlace copiado.',

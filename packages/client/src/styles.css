@@ -1326,6 +1326,37 @@ button.banner:active {
 
 /* ---------- Admin dashboard ---------- */
 
+/* Admin-only light theme (see useTheme.ts) — defaults to dark (the plain
+   :root/body rules above, untouched), and only ever applies when
+   AdminDashboard sets `data-theme` on `body` itself while mounted. Every
+   other screen (TV, umpire, stream viewer, public viewer) never sets this
+   attribute, so this rule never applies there regardless of how they're
+   opened. Scoped to `body[data-theme]` rather than a class further down
+   the tree specifically so it can also override `body`'s own background —
+   the page's actual background layer, which nothing inside `.admin-dashboard`
+   would otherwise be able to repaint over. */
+body[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f8fafc;
+  --bg-raised: #ffffff;
+  --bg-raised-2: #f1f5f9;
+  --border: rgba(15, 23, 42, 0.12);
+  --border-strong: rgba(15, 23, 42, 0.22);
+  --text: #0f172a;
+  --text-dim: #475569;
+  --text-faint: #94a3b8;
+  --side-a: #0891b2;
+  --side-a-dim: #67e8f9;
+  --side-b: #9333ea;
+  --side-b-dim: #e9d5ff;
+  --accent: #0891b2;
+  --success: #059669;
+  --warning: #b45309;
+  --danger: #dc2626;
+  background: var(--bg);
+  color: var(--text);
+}
+
 .admin-dashboard {
   display: flex;
   flex-direction: column;
@@ -1382,6 +1413,13 @@ button.banner:active {
 
 .admin-header-row h1 {
   margin-bottom: 0.5rem;
+}
+
+.admin-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .language-switcher {

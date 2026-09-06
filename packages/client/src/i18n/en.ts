@@ -20,6 +20,9 @@ const en = {
     titleSuffix: '— Admin',
     noTournamentSelected: 'Select a tournament in the desktop launcher first.',
     languageLabel: 'Language',
+    themeLabel: 'Theme',
+    themeDark: 'Dark',
+    themeLight: 'Light',
   },
   clipboard: {
     copied: 'Link copied.',

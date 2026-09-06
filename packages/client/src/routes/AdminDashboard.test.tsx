@@ -2047,4 +2047,46 @@ describe('AdminDashboard', () => {
       expect(await screen.findByRole('heading', { name: 'Canchas' })).toBeInTheDocument();
     });
   });
+
+  describe('theme', () => {
+    it('defaults to dark', async () => {
+      render(<AdminDashboard />);
+
+      const select = (await screen.findByLabelText('Theme')) as HTMLSelectElement;
+      expect(select).toHaveValue('dark');
+      expect(document.body.dataset.theme).toBe('dark');
+    });
+
+    it('switches to light immediately when picked, applied to the page body', async () => {
+      render(<AdminDashboard />);
+      await screen.findByLabelText('Theme');
+
+      await userEvent.selectOptions(screen.getByLabelText('Theme'), 'light');
+
+      expect(document.body.dataset.theme).toBe('light');
+    });
+
+    it('remembers an explicit choice across a reload', async () => {
+      const first = render(<AdminDashboard />);
+      await screen.findByLabelText('Theme');
+      await userEvent.selectOptions(screen.getByLabelText('Theme'), 'light');
+      first.unmount();
+
+      render(<AdminDashboard />);
+
+      const select = (await screen.findByLabelText('Theme')) as HTMLSelectElement;
+      expect(select).toHaveValue('light');
+      expect(document.body.dataset.theme).toBe('light');
+    });
+
+    it('clears the body attribute on unmount, so it never leaks into another screen', async () => {
+      const { unmount } = render(<AdminDashboard />);
+      await screen.findByLabelText('Theme');
+      expect(document.body.dataset.theme).toBe('dark');
+
+      unmount();
+
+      expect(document.body.dataset.theme).toBeUndefined();
+    });
+  });
 });

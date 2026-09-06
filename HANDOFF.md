@@ -750,6 +750,45 @@ specific bootstrap step regardless of whether `.local` resolution works.
 Left as-is (flagged to the user, not yet acted on either way) — revisit if
 a phone that can otherwise reach the server fails specifically at this QR.
 
+## Later session — admin-only dark/light theme toggle
+
+New `packages/client/src/theme/useTheme.ts`, deliberately the same shape as
+`i18n/useTranslation.ts` from the session above it: the "current theme" is
+a pure function of a `localStorage` key (`courtside:theme`), read via
+`useSyncExternalStore` so every call site shares one value with no Context
+provider, and `setTheme()` just writes the key and notifies. The one real
+difference from language: there's no "browser preference" to fall back to
+— the default is simply `dark` until an admin picks otherwise, since that
+was the explicit ask, not "match the OS".
+
+**Scoping "admin only" took more than just a CSS class.** The existing
+palette lives entirely in `:root` custom properties, and `body`'s own rule
+paints the actual page background (a radial gradient using `--bg`) — a
+class scoped somewhere under `.admin-dashboard` can't override that,
+because `body` is an _ancestor_ of the dashboard, not a descendant, and
+custom properties only cascade downward. The light theme is therefore a
+`body[data-theme='light']` rule (higher specificity than the plain `body`
+rule, so it wins regardless of source order) that redefines every palette
+variable and repaints `background`/`color` itself. `AdminDashboard.tsx`
+sets `document.body.dataset.theme` in a `useEffect` keyed on `theme` — and,
+critically, **clears it again in that effect's cleanup function**, so
+navigating away (or just closing the tab) never leaves a leftover
+`data-theme` attribute for whatever screen opens next in the same tab to
+inherit. TV, umpire, stream-viewer and the public viewer never set this
+attribute at all, so `body[data-theme='light']` never matches for them
+regardless.
+
+Not separately audited line-by-line: a few small UI accents (status/category
+pill backgrounds, the current-set highlight in the score table) are
+hand-picked low-opacity `rgba()` tints rather than theme variables. Checked
+that each one still reads fine against a light background as a paler wash
+of the same color rather than clashing outright, but they weren't
+rebalanced specifically for light mode — worth a visual pass if one looks
+off in practice. The QR code's own white plate/dark-module background
+(`.qr-code svg`) is deliberately hardcoded regardless of theme, unrelated
+to this — see the earlier note in this file about scanner contrast
+requirements.
+
 ## Desktop app (`packages/desktop/`) — Electron wrapper
 
 **Why:** running the server required Node install + `npm install` + hand-

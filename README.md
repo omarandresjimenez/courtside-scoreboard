@@ -168,7 +168,7 @@ npm run typecheck    # tsc --noEmit across every package
 npm test             # Jest --coverage in every package
 ```
 
-819 tests across the three packages (457 client / 220 server / 142
+829 tests across the three packages (467 client / 220 server / 142
 shared). Each package enforces its own coverage floor in its
 `jest.config.cjs` (`coverageThreshold`), ratcheted to what its suite
 actually achieves rather than a round number:
@@ -237,6 +237,13 @@ falling back to English, and a language picker in the dashboard's header
 lets the admin override that, remembered for next time. Scoped to the admin
 screen only; the TV, umpire, stream-viewer and public-viewer screens are
 still English-only.
+
+The admin dashboard also has its own light/dark theme toggle (defaulting
+to dark) next to the language picker — see `packages/client/src/theme/`.
+Same admin-only scoping: the choice is applied to `document.body` only
+while the dashboard is mounted and removed on unmount, so it can never
+leak into the TV, umpire, or any other screen opened afterwards in the
+same tab.
 
 Stubbed for the next pass: reassigning an _existing_ match to a court after
 the fact, and the admin `EDIT_MATCH_DETAILS` / `EDIT_SCORING_CONFIG` /
