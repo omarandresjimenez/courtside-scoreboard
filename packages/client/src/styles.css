@@ -6,6 +6,13 @@
   --bg-raised-2: #1a2238;
   --border: rgba(148, 163, 184, 0.16);
   --border-strong: rgba(148, 163, 184, 0.3);
+  /* Translucent surfaces meant to glow softly over the body's gradient
+     (see .admin-card / .admin-form > fieldset:has(> legend)) — their own
+     variables, not just var(--bg-raised) with opacity, because the light
+     theme repaints body as a flat color instead of a gradient (nothing to
+     show through) and wants an opaque surface instead. */
+  --card-bg: rgba(18, 24, 43, 0.75);
+  --fieldset-bg: rgba(10, 14, 26, 0.35);
 
   --text: #f1f5f9;
   --text-dim: #94a3b8;
@@ -1353,6 +1360,11 @@ body[data-theme='light'] {
   --success: #059669;
   --warning: #b45309;
   --danger: #dc2626;
+  /* Dark mode's versions of these are translucent, meant to glow softly
+     over body's gradient — this theme repaints body as a flat color
+     instead (nothing to show through), so these are opaque surfaces. */
+  --card-bg: #ffffff;
+  --fieldset-bg: #f1f5f9;
   background: var(--bg);
   color: var(--text);
 }
@@ -1384,7 +1396,7 @@ body[data-theme='light'] {
 }
 
 .admin-card {
-  background: rgba(18, 24, 43, 0.75);
+  background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.75rem;
@@ -1483,7 +1495,7 @@ body[data-theme='light'] {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   padding: 1.1rem 1rem 1rem;
-  background: rgba(10, 14, 26, 0.35);
+  background: var(--fieldset-bg);
 }
 
 /* Fields stack inside a group; rows opt in with .field-row. */
