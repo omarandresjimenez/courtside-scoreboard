@@ -17,6 +17,8 @@ import {
 import { QRCodeSVG } from 'qrcode.react';
 import { copyToClipboard } from '../lib/clipboard.js';
 import { PlayerAutocomplete, type PlayerSelection } from '../lib/PlayerAutocomplete.js';
+import { useTranslation, type Translation } from '../i18n/useTranslation.js';
+import { LOCALE_NAMES, SUPPORTED_LOCALES, type Locale } from '../i18n/locale.js';
 
 /** The four player slots a match form ever has — singles uses only a1/b1. */
 type PlayerSlot = 'a1' | 'a2' | 'b1' | 'b2';
@@ -97,25 +99,29 @@ function needsMatchDetail(match: MatchSummaryResponse): boolean {
   return !match.players || !match.derived || match.courtLabel === undefined;
 }
 
-function displayStatus(match: MatchSummary): string {
-  if (match.derived.retiredSide) return 'Finalized — retired';
-  if (match.derived.matchWinner || match.status === 'COMPLETED') return 'Finalized';
+function displayStatus(match: MatchSummary, t: Translation['t']): string {
+  if (match.derived.retiredSide) return t('status.finalizedRetired');
+  if (match.derived.matchWinner || match.status === 'COMPLETED') return t('status.finalized');
   if (
     match.status === 'IN_PROGRESS' ||
     match.derived.sets.some((set) => set.scoreA > 0 || set.scoreB > 0)
   ) {
-    return 'Match in progress';
+    return t('status.inProgress');
   }
-  return 'Match ready';
+  return t('status.ready');
 }
 
-function formatDuration(startedAt?: string | null, completedAt?: string | null): string | null {
+function formatDuration(
+  startedAt: string | null | undefined,
+  completedAt: string | null | undefined,
+  t: Translation['t'],
+): string | null {
   if (!startedAt) return null;
   const end = completedAt ? Date.parse(completedAt) : Date.now();
   const elapsedSeconds = Math.max(0, Math.floor((end - Date.parse(startedAt)) / 1000));
   const minutes = Math.floor(elapsedSeconds / 60);
   const seconds = elapsedSeconds % 60;
-  return `${minutes} min ${seconds} sec`;
+  return t('duration.format', { minutes, seconds });
 }
 
 function absoluteUrl(pathAndQuery: string): string {
@@ -208,6 +214,7 @@ function streamBroadcastLinkFor(court: Pick<Court, 'courtId'>, mdnsHost: string 
  * and match editing are the next wiring pass — see the design doc's "Set 09".
  */
 export function AdminDashboard() {
+  const { t, locale, setLocale } = useTranslation();
   const tournamentId =
     new URLSearchParams(window.location.search).get('tournamentId') ??
     localStorage.getItem('courtside:tournamentId') ??
@@ -308,7 +315,7 @@ export function AdminDashboard() {
 
   async function handleCopy(text: string) {
     const copied = await copyToClipboard(text);
-    setStatus(copied ? 'Link copied.' : "Couldn't copy — select the link above and copy manually.");
+    setStatus(t(copied ? 'clipboard.copied' : 'clipboard.copyFailed'));
   }
 
   async function deleteCourt(courtIdToDelete: string) {
@@ -318,10 +325,10 @@ export function AdminDashboard() {
     });
 
     if (!res.ok) {
-      setStatus(await readErrorMessage(res, 'Failed to remove court.'));
+      setStatus(await readErrorMessage(res, t('courts.removeFailed')));
       return;
     }
-    setStatus('Court removed.');
+    setStatus(t('courts.removed'));
     void refreshCourts();
   }
 
@@ -332,10 +339,10 @@ export function AdminDashboard() {
     });
 
     if (!res.ok) {
-      setStatus(await readErrorMessage(res, 'Failed to remove umpire.'));
+      setStatus(await readErrorMessage(res, t('umpires.removeFailed')));
       return;
     }
-    setStatus('Umpire removed.');
+    setStatus(t('umpires.removed'));
     void refreshUmpires();
   }
 
@@ -401,9 +408,7 @@ export function AdminDashboard() {
       const text = await readFileAsText(file);
       const { rows, skipped: unreadableRows } = parseTournamentPlayersCsv(text);
       if (rows.length === 0) {
-        setStatus(
-          'No usable rows found in that file — every row needs at least a first and last name.',
-        );
+        setStatus(t('roster.noUsableRows'));
         return;
       }
 
@@ -413,15 +418,24 @@ export function AdminDashboard() {
         body: JSON.stringify({ tournamentId, players: rows }),
       });
       if (!res.ok) {
-        setStatus(await readErrorMessage(res, 'Failed to import players.'));
+        setStatus(await readErrorMessage(res, t('roster.importFailed')));
         return;
       }
 
       const summary = (await res.json()) as { imported: number; updated: number; skipped: number };
       const totalSkipped = summary.skipped + unreadableRows;
       setStatus(
-        `Imported ${summary.imported} player${summary.imported === 1 ? '' : 's'}, updated ${summary.updated}` +
-          (totalSkipped ? `, skipped ${totalSkipped} row${totalSkipped === 1 ? '' : 's'}` : '') +
+        t('roster.importResult', {
+          count: summary.imported,
+          playerWord: t(summary.imported === 1 ? 'common.player' : 'common.players'),
+          updated: summary.updated,
+        }) +
+          (totalSkipped
+            ? t('roster.importSkippedClause', {
+                count: totalSkipped,
+                rowWord: t(totalSkipped === 1 ? 'common.row' : 'common.rows'),
+              })
+            : '') +
           '.',
       );
       void refreshTournamentPlayers();
@@ -430,7 +444,7 @@ export function AdminDashboard() {
       // server that isn't listening at all — or FileReader failing) would
       // otherwise propagate out of this `void`-called async function as an
       // unhandled rejection: no status message, no visible failure at all.
-      setStatus('Failed to import players — check the connection and try again.');
+      setStatus(t('roster.importNetworkFailure'));
     } finally {
       setIsImportingRoster(false);
     }
@@ -447,7 +461,7 @@ export function AdminDashboard() {
     });
 
     if (!res.ok) {
-      setStatus(await readErrorMessage(res, 'Failed to create court.'));
+      setStatus(await readErrorMessage(res, t('courts.createFailed')));
       return;
     }
     setNewCourtLabel('');
@@ -465,7 +479,7 @@ export function AdminDashboard() {
     });
 
     if (!res.ok) {
-      setStatus(await readErrorMessage(res, 'Failed to add umpire.'));
+      setStatus(await readErrorMessage(res, t('umpires.addFailed')));
       return;
     }
     setNewUmpireName('');
@@ -535,7 +549,7 @@ export function AdminDashboard() {
     if (hasRoster) {
       const missingSlot = slots.find((key) => !rosterSelections[key]);
       if (missingSlot) {
-        setMatchStatus('Pick every player from the list before creating the match.');
+        setMatchStatus(t('createMatch.pickEveryPlayer'));
         return;
       }
       players = slots.map((key) => ({
@@ -572,11 +586,11 @@ export function AdminDashboard() {
     });
 
     if (!res.ok) {
-      setMatchStatus(await readErrorMessage(res, 'Failed to create match.'));
+      setMatchStatus(await readErrorMessage(res, t('createMatch.createFailed')));
       return;
     }
     const created = (await res.json()) as { match: Match };
-    setMatchStatus('Match created.');
+    setMatchStatus(t('createMatch.created'));
     setLastCreated({
       matchId: created.match.matchId,
       courtLabel:
@@ -621,14 +635,29 @@ export function AdminDashboard() {
 
   return (
     <main className="admin-dashboard">
-      <h1>{tournamentName || 'Tournament'} — Admin</h1>
+      <div className="admin-header-row">
+        <h1>
+          {tournamentName || t('header.defaultTournamentName')} {t('header.titleSuffix')}
+        </h1>
+        {/* Defaults to the browser/system language (falling back to
+            English), but an explicit pick here overrides that from now on
+            — see useTranslation's stored-preference logic. */}
+        <label className="language-switcher">
+          {t('header.languageLabel')}
+          <select value={locale} onChange={(e) => setLocale(e.target.value as Locale)}>
+            {SUPPORTED_LOCALES.map((code) => (
+              <option key={code} value={code}>
+                {LOCALE_NAMES[code]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       {tournamentDate && (
         <p className="tournament-date">{new Date(tournamentDate).toLocaleDateString()}</p>
       )}
 
-      {!tournamentId && (
-        <p className="field-error">Select a tournament in the desktop launcher first.</p>
-      )}
+      {!tournamentId && <p className="field-error">{t('header.noTournamentSelected')}</p>}
 
       {/* One shared status line for every admin action (add/remove a court
           or umpire, create a match, copy a link) — rendered here, at the
@@ -642,19 +671,15 @@ export function AdminDashboard() {
 
       {tournamentId && (
         <section className="admin-card roster-import-card">
-          <h2>Import players</h2>
-          <p className="section-hint">
-            Upload this tournament&rsquo;s player list once (a CSV export from your tournament
-            software) to pick players by name below instead of retyping them, and to restrict
-            category to the ones players are actually registered for.
-          </p>
+          <h2>{t('roster.cardHeading')}</h2>
+          <p className="section-hint">{t('roster.cardHint')}</p>
           <div className="field-row">
             <label className="file-input-label">
-              Player list CSV
+              {t('roster.fileLabel')}
               <input
                 type="file"
                 accept=".csv,text/csv"
-                aria-label="Player list CSV file"
+                aria-label={t('roster.fileAriaLabel')}
                 disabled={isImportingRoster}
                 onChange={(e) => {
                   const file = e.target.files?.[0];
@@ -669,8 +694,10 @@ export function AdminDashboard() {
           </div>
           {tournamentPlayers.length > 0 && (
             <p className="field-hint">
-              {tournamentPlayers.length} player{tournamentPlayers.length === 1 ? '' : 's'} imported
-              for this tournament.
+              {t('roster.importedCount', {
+                count: tournamentPlayers.length,
+                playerWord: t(tournamentPlayers.length === 1 ? 'common.player' : 'common.players'),
+              })}
             </p>
           )}
         </section>
@@ -680,17 +707,15 @@ export function AdminDashboard() {
         <div className="admin-grid">
           <div className="admin-column">
             <section className="admin-card">
-              <h2>Courts</h2>
-              <p className="section-hint">
-                Courts hold the TV and public links, and a match is assigned to one.
-              </p>
+              <h2>{t('courts.heading')}</h2>
+              <p className="section-hint">{t('courts.hint')}</p>
               <form onSubmit={createCourt}>
                 <fieldset>
                   <label>
-                    Court name
+                    {t('courts.nameLabel')}
                     <input
-                      aria-label="Court label"
-                      placeholder="e.g. Court 1…"
+                      aria-label={t('courts.nameAriaLabel')}
+                      placeholder={t('courts.namePlaceholder')}
                       value={newCourtLabel}
                       onChange={(e) => setNewCourtLabel(e.target.value)}
                       /* A venue's court names are not the browser's to guess,
@@ -701,13 +726,13 @@ export function AdminDashboard() {
                     />
                   </label>
                   <div className="form-actions">
-                    <button type="submit">Add court</button>
+                    <button type="submit">{t('courts.addButton')}</button>
                   </div>
                 </fieldset>
               </form>
 
               {courts.length === 0 ? (
-                <p>No courts yet — add one above, then its TV link appears here.</p>
+                <p>{t('courts.empty')}</p>
               ) : (
                 <ul className="court-list court-accordion">
                   {courts.map((c) => (
@@ -749,19 +774,21 @@ export function AdminDashboard() {
                               whether a CREATED/IN_PROGRESS match is on it
                               right now. */}
                           <span className="status-tag">
-                            {occupiedCourtIds.has(c.courtId) ? 'Busy' : 'Available'}
+                            {occupiedCourtIds.has(c.courtId)
+                              ? t('common.busy')
+                              : t('common.available')}
                           </span>
                         </summary>
                         <div className="court-details-body">
                           <div className="court-row-info">
                             <span>
-                              Code on <a href="/tv">/tv</a>:{' '}
+                              {t('courts.codeOn')} <a href="/tv">/tv</a>:{' '}
                               <strong className="join-code">{c.tvCode}</strong>
                             </span>
                           </div>
                           <div className="court-row-actions">
                             <input
-                              aria-label="TV link"
+                              aria-label={t('courts.tvLinkAriaLabel')}
                               readOnly
                               value={tvLinkFor(c)}
                               onFocus={(e) => e.target.select()}
@@ -771,17 +798,17 @@ export function AdminDashboard() {
                             they were indistinguishable. */}
                             <button
                               type="button"
-                              aria-label={`Copy TV link for ${c.label}`}
+                              aria-label={t('courts.copyTvLink', { label: c.label })}
                               onClick={() => void handleCopy(tvLinkFor(c))}
                             >
-                              Copy
+                              {t('common.copy')}
                             </button>
                             <button
                               type="button"
                               className="danger-button"
                               onClick={() => void deleteCourt(c.courtId)}
                             >
-                              Remove
+                              {t('common.remove')}
                             </button>
                           </div>
                           {/* Kept visually distinct from the LAN links above: this
@@ -791,22 +818,22 @@ export function AdminDashboard() {
                           <div className="court-row-actions public-link-row">
                             <span
                               className="public-link-label"
-                              title="Anyone on the internet can open this"
+                              title={t('courts.publicScoreTitle')}
                             >
-                              🌐 Public score
+                              🌐 {t('courts.publicScoreLabel')}
                             </span>
                             <input
-                              aria-label="Public internet scoreboard link"
+                              aria-label={t('courts.publicLinkAriaLabel')}
                               readOnly
                               value={publicScoreLinkFor(c)}
                               onFocus={(e) => e.target.select()}
                             />
                             <button
                               type="button"
-                              aria-label={`Copy public internet link for ${c.label}`}
+                              aria-label={t('courts.copyPublicLink', { label: c.label })}
                               onClick={() => void handleCopy(publicScoreLinkFor(c))}
                             >
-                              Copy
+                              {t('common.copy')}
                             </button>
                           </div>
                           {/* One stable link per court (see streamBroadcastLinkFor)
@@ -817,23 +844,23 @@ export function AdminDashboard() {
                           a full-size code per court would make this list
                           impossible to scan at a glance. */}
                           <div className="court-row-actions broadcast-link-row">
-                            <span className="public-link-label" title="Opens the camera on a phone">
-                              📷 Broadcast
+                            <span className="public-link-label" title={t('courts.broadcastTitle')}>
+                              📷 {t('courts.broadcastLabel')}
                             </span>
                             <input
-                              aria-label="Broadcast link (court phone)"
+                              aria-label={t('courts.broadcastLinkAriaLabel')}
                               readOnly
                               value={streamBroadcastLinkFor(c, mdnsHostname)}
                               onFocus={(e) => e.target.select()}
                             />
                             <button
                               type="button"
-                              aria-label={`Copy broadcast link for ${c.label}`}
+                              aria-label={t('courts.copyBroadcastLink', { label: c.label })}
                               onClick={() =>
                                 void handleCopy(streamBroadcastLinkFor(c, mdnsHostname))
                               }
                             >
-                              Copy
+                              {t('common.copy')}
                             </button>
                             <QRCodeSVG
                               value={streamBroadcastLinkFor(c, mdnsHostname)}
@@ -842,7 +869,7 @@ export function AdminDashboard() {
                               fgColor="#0a0e1a"
                               marginSize={1}
                               className="broadcast-qr"
-                              title={`QR code for the broadcast link to ${c.label}`}
+                              title={t('courts.broadcastQrTitle', { label: c.label })}
                             />
                           </div>
                         </div>
@@ -854,17 +881,15 @@ export function AdminDashboard() {
             </section>
 
             <section className="admin-card">
-              <h2>Umpires</h2>
-              <p className="section-hint">
-                An umpire can only be assigned to one live match at a time.
-              </p>
+              <h2>{t('umpires.heading')}</h2>
+              <p className="section-hint">{t('umpires.hint')}</p>
               <form onSubmit={createUmpire}>
                 <fieldset>
                   <label>
-                    Umpire name
+                    {t('umpires.nameLabel')}
                     <input
-                      aria-label="Umpire name"
-                      placeholder="e.g. Ana Gómez…"
+                      aria-label={t('umpires.nameLabel')}
+                      placeholder={t('umpires.namePlaceholder')}
                       value={newUmpireName}
                       onChange={(e) => setNewUmpireName(e.target.value)}
                       autoComplete="off"
@@ -873,13 +898,13 @@ export function AdminDashboard() {
                     />
                   </label>
                   <div className="form-actions">
-                    <button type="submit">Add umpire</button>
+                    <button type="submit">{t('umpires.addButton')}</button>
                   </div>
                 </fieldset>
               </form>
 
               {umpires.length === 0 ? (
-                <p>No umpires yet — add one above to assign them to matches.</p>
+                <p>{t('umpires.empty')}</p>
               ) : (
                 <ul className="court-list umpire-list">
                   {umpires.map((u) => {
@@ -888,7 +913,9 @@ export function AdminDashboard() {
                       <li key={u.umpireId}>
                         <div className="court-header">
                           <span>{u.name}</span>
-                          <span className="status-tag">{busy ? 'Busy' : 'Available'}</span>
+                          <span className="status-tag">
+                            {busy ? t('common.busy') : t('common.available')}
+                          </span>
                         </div>
                         <div className="inline-actions">
                           <button
@@ -896,7 +923,7 @@ export function AdminDashboard() {
                             className="danger-button"
                             onClick={() => void deleteUmpire(u.umpireId)}
                           >
-                            Remove
+                            {t('common.remove')}
                           </button>
                         </div>
                       </li>
@@ -915,15 +942,10 @@ export function AdminDashboard() {
                   <span className="section-chevron" aria-hidden="true">
                     ▸
                   </span>
-                  <h2>Trust this phone for camera streaming</h2>
+                  <h2>{t('trustCamera.heading')}</h2>
                 </summary>
                 <div className="section-accordion-body">
-                  <p className="section-hint">
-                    The camera page needs a secure connection, so browsers show a one-time security
-                    warning the first time a phone opens it. Scan this once per phone that will ever
-                    film a match — after that, the warning won&rsquo;t come back, even across
-                    restarts or a different court.
-                  </p>
+                  <p className="section-hint">{t('trustCamera.hint')}</p>
                   <div className="trust-camera-body">
                     <figure className="qr-code">
                       <QRCodeSVG
@@ -932,22 +954,20 @@ export function AdminDashboard() {
                         bgColor="#ffffff"
                         fgColor="#0a0e1a"
                         marginSize={1}
-                        title="QR code to install this server's camera-streaming certificate"
+                        title={t('trustCamera.qrTitle')}
                       />
-                      <figcaption>Scan on the filming phone</figcaption>
+                      <figcaption>{t('trustCamera.scanCaption')}</figcaption>
                     </figure>
                     <details>
-                      <summary>Show install steps</summary>
+                      <summary>{t('trustCamera.showSteps')}</summary>
                       <ol className="trust-camera-steps">
                         <li>
-                          <strong>iPhone:</strong> tap the downloaded profile, then Settings →
-                          General → VPN &amp; Device Management → tap it again → Install. Then
-                          Settings → General → About → Certificate Trust Settings → turn on full
-                          trust for &ldquo;Courtside Scoreboard Local CA&rdquo;.
+                          <strong>{t('trustCamera.iphoneLabel')}</strong>{' '}
+                          {t('trustCamera.iphoneSteps')}
                         </li>
                         <li>
-                          <strong>Android:</strong> tap the downloaded file, choose &ldquo;CA
-                          certificate&rdquo; when asked what kind of certificate this is.
+                          <strong>{t('trustCamera.androidLabel')}</strong>{' '}
+                          {t('trustCamera.androidSteps')}
                         </li>
                       </ol>
                     </details>
@@ -958,40 +978,38 @@ export function AdminDashboard() {
           </div>
 
           <section className="admin-card">
-            <h2>Create match</h2>
-            <p className="section-hint">
-              The umpire link is shown once after creating, so keep this tab open.
-            </p>
+            <h2>{t('createMatch.heading')}</h2>
+            <p className="section-hint">{t('createMatch.hint')}</p>
             <form onSubmit={createMatch} className="admin-form">
               <fieldset>
-                <legend>Format</legend>
+                <legend>{t('createMatch.formatLegend')}</legend>
 
                 <div className="field-row">
                   <label>
-                    Match type
+                    {t('createMatch.matchTypeLabel')}
                     <select
                       value={matchType}
                       onChange={(e) => setMatchType(e.target.value as MatchType)}
                     >
-                      <option value="singles">Singles</option>
-                      <option value="doubles">Doubles</option>
+                      <option value="singles">{t('createMatch.singles')}</option>
+                      <option value="doubles">{t('createMatch.doubles')}</option>
                     </select>
                   </label>
 
                   <label>
-                    Scoring format
+                    {t('createMatch.scoringFormatLabel')}
                     <select
                       value={preset}
                       onChange={(e) => setPreset(e.target.value as ScoringPresetName)}
                     >
-                      <option value="standard">Standard (21 / 30 / 11)</option>
-                      <option value="short">Short (15 / 21 / 8)</option>
+                      <option value="standard">{t('createMatch.presetStandard')}</option>
+                      <option value="short">{t('createMatch.presetShort')}</option>
                     </select>
                   </label>
                 </div>
 
                 <label>
-                  Category
+                  {t('createMatch.categoryLabel')}
                   {availableCategories.length > 0 ? (
                     <select
                       value={category}
@@ -999,7 +1017,7 @@ export function AdminDashboard() {
                       required
                       aria-describedby="category-hint"
                     >
-                      <option value="">Choose category</option>
+                      <option value="">{t('createMatch.chooseCategory')}</option>
                       {availableCategories.map((c) => (
                         <option key={c} value={c}>
                           {c}
@@ -1010,7 +1028,7 @@ export function AdminDashboard() {
                     <input
                       value={category}
                       onChange={(e) => setCategory(e.target.value)}
-                      placeholder="e.g. MS U19…"
+                      placeholder={t('createMatch.categoryPlaceholder')}
                       list="category-suggestions"
                       autoComplete="off"
                       spellCheck={false}
@@ -1024,9 +1042,8 @@ export function AdminDashboard() {
                 </label>
                 <p className="field-hint" id="category-hint">
                   {availableCategories.length > 0
-                    ? 'From the imported player list — only categories a player is actually registered for.'
-                    : 'Free text. Shown on the TV, umpire and viewer screens in place of ' +
-                      '“singles”/“doubles”, which it already implies.'}
+                    ? t('createMatch.categoryHintRoster')
+                    : t('createMatch.categoryHintFree')}
                 </p>
                 {/* Suggestions, not a closed list: category codes vary by
                     federation and age group, so anything fixed would be wrong
@@ -1044,18 +1061,18 @@ export function AdminDashboard() {
               </fieldset>
 
               <fieldset>
-                <legend>Assignment</legend>
+                <legend>{t('createMatch.assignmentLegend')}</legend>
 
                 <label>
-                  Court
+                  {t('createMatch.courtLabel')}
                   <select value={courtId} onChange={(e) => setCourtId(e.target.value)} required>
-                    <option value="">Choose court</option>
+                    <option value="">{t('createMatch.chooseCourt')}</option>
                     {courts.map((c) => {
                       const busy = occupiedCourtIds.has(c.courtId);
                       return (
                         <option key={c.courtId} value={c.courtId} disabled={busy}>
                           {c.label}
-                          {busy ? ' — in use' : ''}
+                          {busy ? t('courts.inUseSuffix') : ''}
                         </option>
                       );
                     })}
@@ -1063,15 +1080,15 @@ export function AdminDashboard() {
                 </label>
 
                 <label>
-                  Umpire
+                  {t('createMatch.umpireLabel')}
                   <select value={umpireId} onChange={(e) => setUmpireId(e.target.value)} required>
-                    <option value="">Choose umpire</option>
+                    <option value="">{t('createMatch.chooseUmpire')}</option>
                     {umpires.map((u) => {
                       const busy = occupiedUmpireIds.has(u.umpireId);
                       return (
                         <option key={u.umpireId} value={u.umpireId} disabled={busy}>
                           {u.name}
-                          {busy ? ' — busy' : ''}
+                          {busy ? t('umpires.busySuffix') : ''}
                         </option>
                       );
                     })}
@@ -1080,7 +1097,7 @@ export function AdminDashboard() {
               </fieldset>
 
               <fieldset>
-                <legend>Players</legend>
+                <legend>{t('createMatch.playersLegend')}</legend>
                 {/* Team and country used to be their own "Sides" fieldset
                     ahead of Players; now they sit right under the player(s)
                     they belong to on each side, and — once a roster is
@@ -1088,9 +1105,8 @@ export function AdminDashboard() {
                     instead of being retyped. */}
                 <p className="field-hint">
                   {hasRoster
-                    ? "Team and country fill in automatically from the selected player's roster " +
-                      'record — edit them if this pairing doesn’t match it.'
-                    : 'Team and country are optional — club play usually has neither.'}
+                    ? t('createMatch.teamCountryHintRoster')
+                    : t('createMatch.teamCountryHintFree')}
                 </p>
                 <div className="match-sides-fields">
                   {(['A', 'B'] as const).map((side) => (
@@ -1098,7 +1114,10 @@ export function AdminDashboard() {
                       {SIDE_SLOTS[side]
                         .filter((key) => matchType === 'doubles' || !key.endsWith('2'))
                         .map((key) => {
-                          const legend = `Side ${side} player ${key.endsWith('2') ? 2 : 1}`;
+                          const legend = t('createMatch.sidePlayerLegend', {
+                            side,
+                            number: key.endsWith('2') ? 2 : 1,
+                          });
                           return hasRoster ? (
                             // Once a roster has been imported, players are found
                             // by name instead of typed — see PlayerAutocomplete —
@@ -1147,9 +1166,9 @@ export function AdminDashboard() {
                                   pulls it out of the border gap. */}
                               <div className="field-row">
                                 <label>
-                                  First name
+                                  {t('createMatch.firstNameLabel')}
                                   <input
-                                    aria-label={`${legend} first name`}
+                                    aria-label={`${legend} ${t('createMatch.firstNameLabel').toLowerCase()}`}
                                     value={names[key].first}
                                     onChange={(e) =>
                                       setNames((current) => ({
@@ -1165,9 +1184,9 @@ export function AdminDashboard() {
                                   />
                                 </label>
                                 <label>
-                                  Last name
+                                  {t('createMatch.lastNameLabel')}
                                   <input
-                                    aria-label={`${legend} last name`}
+                                    aria-label={`${legend} ${t('createMatch.lastNameLabel').toLowerCase()}`}
                                     value={names[key].last}
                                     onChange={(e) =>
                                       setNames((current) => ({
@@ -1186,9 +1205,9 @@ export function AdminDashboard() {
                         })}
 
                       <fieldset className={`team-fieldset side-${side.toLowerCase()}`}>
-                        <legend>Side {side} team</legend>
+                        <legend>{t('createMatch.sideTeamLegend', { side })}</legend>
                         <label>
-                          Team
+                          {t('createMatch.teamLabel')}
                           <input
                             value={teams[side].name}
                             onChange={(e) =>
@@ -1197,13 +1216,13 @@ export function AdminDashboard() {
                                 [side]: { ...current[side], name: e.target.value },
                               }))
                             }
-                            placeholder="Optional…"
+                            placeholder={t('common.optionalPlaceholder')}
                             autoComplete="off"
                             spellCheck={false}
                           />
                         </label>
                         <label>
-                          Country
+                          {t('createMatch.countryLabel')}
                           <input
                             value={teams[side].country}
                             onChange={(e) =>
@@ -1212,7 +1231,7 @@ export function AdminDashboard() {
                                 [side]: { ...current[side], country: e.target.value },
                               }))
                             }
-                            placeholder="Optional…"
+                            placeholder={t('common.optionalPlaceholder')}
                             autoComplete="off"
                             spellCheck={false}
                           />
@@ -1225,7 +1244,7 @@ export function AdminDashboard() {
 
               <div className="form-actions">
                 <button type="submit" aria-busy={isCreating} disabled={isCreating}>
-                  {isCreating ? 'Creating…' : 'Create match'}
+                  {isCreating ? t('createMatch.submitCreating') : t('createMatch.submitCreate')}
                 </button>
               </div>
               {/* Its own feedback, separate from the page-wide `status` banner
@@ -1242,18 +1261,19 @@ export function AdminDashboard() {
 
             {lastCreated && (
               <div className="created-match-links">
-                <p>Umpire access — give this only to the umpire, it won&rsquo;t be shown again:</p>
+                <p>{t('createMatch.umpireAccessIntro')}</p>
                 <p>
-                  Assigned court: <strong>{lastCreated.courtLabel ?? 'Court unavailable'}</strong>
+                  {t('createMatch.assignedCourt')}{' '}
+                  <strong>{lastCreated.courtLabel ?? t('createMatch.courtUnavailable')}</strong>
                 </p>
                 <div className="umpire-handoff">
                   <div className="umpire-handoff-details">
                     <p>
-                      Code on <a href="/umpire">/umpire</a>:{' '}
+                      {t('courts.codeOn')} <a href="/umpire">/umpire</a>:{' '}
                       <strong className="join-code">{lastCreated.umpireCode}</strong>
                     </p>
                     <label>
-                      Umpire link
+                      {t('createMatch.umpireLinkLabel')}
                       <input
                         readOnly
                         value={lastCreated.umpireLink}
@@ -1273,13 +1293,13 @@ export function AdminDashboard() {
                       bgColor="#ffffff"
                       fgColor="#0a0e1a"
                       marginSize={1}
-                      title={`QR code for the umpire link to match ${lastCreated.matchId}`}
+                      title={t('createMatch.umpireQrTitle', { matchId: lastCreated.matchId })}
                     />
-                    <figcaption>Umpire</figcaption>
+                    <figcaption>{t('createMatch.umpireCaption')}</figcaption>
                   </figure>
                 </div>
                 <button type="button" onClick={() => void handleCopy(lastCreated.umpireLink)}>
-                  Copy umpire link
+                  {t('createMatch.copyUmpireLink')}
                 </button>
                 {/* No streaming links here anymore — the broadcast link is
                     the same URL for every match on a court (it's keyed by
@@ -1295,10 +1315,10 @@ export function AdminDashboard() {
       {tournamentId && (
         <>
           <div className="history-header">
-            <h2>Match history</h2>
+            <h2>{t('matchHistory.heading')}</h2>
             {matches.length > 0 && (
               <label className="history-page-size">
-                Rows per page
+                {t('matchHistory.rowsPerPage')}
                 <select
                   value={historyPageSize}
                   onChange={(e) => {
@@ -1318,17 +1338,17 @@ export function AdminDashboard() {
           </div>
           <ul className="history-list">
             {matches.length === 0 ? (
-              <li className="empty-state">No matches yet.</li>
+              <li className="empty-state">{t('matchHistory.empty')}</li>
             ) : (
               paginatedMatches.map((m) =>
                 (() => {
                   const courtName =
                     m.courtLabel ??
                     courts.find((court) => court.courtId === m.assignedCourtId)?.label ??
-                    'Court';
+                    t('matchHistory.courtFallback');
                   const umpireName =
                     m.umpireName ?? umpires.find((u) => u.umpireId === m.assignedUmpireId)?.name;
-                  const duration = formatDuration(m.startedAt, m.completedAt);
+                  const duration = formatDuration(m.startedAt, m.completedAt, t);
                   return (
                     <li key={m.matchId}>
                       <div className="history-topline">
@@ -1338,28 +1358,32 @@ export function AdminDashboard() {
                             it replaces that label instead of sitting beside
                             it — this list used to show both at once. */}
                         <span className="category-tag">{m.category ?? m.matchType}</span>
-                        <span className="status-tag">{displayStatus(m)}</span>
+                        <span className="status-tag">{displayStatus(m, t)}</span>
                       </div>
                       <small>
                         {courtName} · {new Date(m.createdAt).toLocaleString()}
                         {duration && ` · ${duration}`}
-                        {umpireName && ` · Umpire: ${umpireName}`}
+                        {umpireName && ` · ${t('matchHistory.umpirePrefix')} ${umpireName}`}
                       </small>
                       <div
                         className="tv-scoreboard history-scoreboard"
-                        aria-label="Match score"
+                        aria-label={t('matchHistory.matchScoreAriaLabel')}
                         style={{ '--set-count': m.derived.sets.length } as React.CSSProperties}
                       >
                         <div className="tv-set-labels" aria-hidden="true">
                           <span />
                           {m.derived.sets.map((set) => (
                             <span key={set.setNumber} className={set.winner ? '' : 'current-set'}>
-                              Set {set.setNumber}
+                              {t('matchHistory.setLabel', { number: set.setNumber })}
                             </span>
                           ))}
                         </div>
                         {(['A', 'B'] as const).map((side) => {
-                          const names = formatSideNames(m.players, side, `Side ${side}`);
+                          const names = formatSideNames(
+                            m.players,
+                            side,
+                            t('matchHistory.sideFallback', { side }),
+                          );
                           return (
                             <div
                               className={`tv-player-row side-${side.toLowerCase()}${m.derived.matchWinner === side ? ' match-winner' : ''}`}
@@ -1368,7 +1392,7 @@ export function AdminDashboard() {
                               <strong className="tv-player-name">
                                 {names}
                                 {m.derived.retiredSide === side && (
-                                  <span className="retired-tag">Retired</span>
+                                  <span className="retired-tag">{t('matchHistory.retired')}</span>
                                 )}
                               </strong>
                               {m.derived.sets.map((set) => (
@@ -1396,17 +1420,20 @@ export function AdminDashboard() {
                 onClick={() => setHistoryPage((page) => Math.max(0, page - 1))}
                 disabled={currentHistoryPage === 0}
               >
-                ← Previous
+                {t('matchHistory.previous')}
               </button>
               <span>
-                Page {currentHistoryPage + 1} of {historyPageCount}
+                {t('matchHistory.pageOf', {
+                  current: currentHistoryPage + 1,
+                  total: historyPageCount,
+                })}
               </span>
               <button
                 type="button"
                 onClick={() => setHistoryPage((page) => Math.min(historyPageCount - 1, page + 1))}
                 disabled={currentHistoryPage >= historyPageCount - 1}
               >
-                Next →
+                {t('matchHistory.next')}
               </button>
             </div>
           )}

@@ -1970,4 +1970,81 @@ describe('AdminDashboard', () => {
       expect(screen.queryByText(/Page \d+ of \d+/)).not.toBeInTheDocument();
     });
   });
+
+  describe('language', () => {
+    const original = { languages: navigator.languages, language: navigator.language };
+
+    afterEach(() => {
+      Object.defineProperty(navigator, 'languages', {
+        value: original.languages,
+        configurable: true,
+      });
+      Object.defineProperty(navigator, 'language', {
+        value: original.language,
+        configurable: true,
+      });
+    });
+
+    it("renders in Spanish when the browser's preferred language is Spanish", async () => {
+      Object.defineProperty(navigator, 'languages', { value: ['es-MX'], configurable: true });
+      Object.defineProperty(navigator, 'language', { value: 'es-MX', configurable: true });
+
+      render(<AdminDashboard />);
+
+      expect(await screen.findByRole('heading', { name: /— Administración/ })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Canchas' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Árbitros' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Crear partido' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Agregar cancha' })).toBeInTheDocument();
+    });
+
+    it('falls back to English when the browser prefers an unsupported language', async () => {
+      Object.defineProperty(navigator, 'languages', { value: ['de-DE'], configurable: true });
+      Object.defineProperty(navigator, 'language', { value: 'de-DE', configurable: true });
+
+      render(<AdminDashboard />);
+
+      expect(await screen.findByRole('heading', { name: 'Courts' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Create match' })).toBeInTheDocument();
+    });
+
+    it('offers a language dropdown defaulting to the detected language', async () => {
+      Object.defineProperty(navigator, 'languages', { value: ['en-US'], configurable: true });
+      Object.defineProperty(navigator, 'language', { value: 'en-US', configurable: true });
+
+      render(<AdminDashboard />);
+
+      const select = (await screen.findByLabelText('Language')) as HTMLSelectElement;
+      expect(select).toHaveValue('en');
+      expect(Array.from(select.options).map((o) => o.text)).toEqual(['English', 'Español']);
+    });
+
+    it('switches the whole page to the picked language immediately', async () => {
+      Object.defineProperty(navigator, 'languages', { value: ['en-US'], configurable: true });
+      Object.defineProperty(navigator, 'language', { value: 'en-US', configurable: true });
+
+      render(<AdminDashboard />);
+      await screen.findByRole('heading', { name: 'Courts' });
+
+      await userEvent.selectOptions(screen.getByLabelText('Language'), 'es');
+
+      expect(screen.getByRole('heading', { name: 'Canchas' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Crear partido' })).toBeInTheDocument();
+    });
+
+    it('remembers an explicit language choice across a reload, overriding the browser language', async () => {
+      Object.defineProperty(navigator, 'languages', { value: ['en-US'], configurable: true });
+      Object.defineProperty(navigator, 'language', { value: 'en-US', configurable: true });
+      const first = render(<AdminDashboard />);
+      await screen.findByRole('heading', { name: 'Courts' });
+      await userEvent.selectOptions(screen.getByLabelText('Language'), 'es');
+      first.unmount();
+
+      // A fresh mount (what a page reload is, from React's perspective) —
+      // the browser is still reporting English, but the saved choice wins.
+      render(<AdminDashboard />);
+
+      expect(await screen.findByRole('heading', { name: 'Canchas' })).toBeInTheDocument();
+    });
+  });
 });

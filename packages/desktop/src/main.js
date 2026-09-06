@@ -33,6 +33,12 @@ let serverProcess = null;
 let launcherWindow = null;
 let currentConfig = null;
 let serverState = { status: 'starting', message: '' };
+// Resolved once per run, right after the server confirms it's listening —
+// see resolveDashboardHost(). Null until then; every screen this app opens
+// or links to (the launcher's own display, the admin dashboard, and every
+// TV/umpire/broadcast link the admin dashboard builds from its own
+// window.location.origin) follows whatever this resolves to.
+let dashboardHost = null;
 
 function resourcesPath() {
   return app.isPackaged ? process.resourcesPath : path.join(__dirname, '..', 'resources');
@@ -172,8 +178,55 @@ function notifyLauncher() {
   launcherWindow.webContents.send('server-state', {
     ...serverState,
     addresses: lanAddresses(),
+    dashboardHost,
     port: PORT,
   });
+}
+
+/** True only if `host` actually resolves and answers on this machine right
+ * now — advertising a name over mDNS (bonjour-service, server-side) and
+ * being able to resolve one (this OS's own multicast-DNS resolver) are two
+ * different things, and the gap between them is exactly the venues where
+ * this matters (a Windows machine with no Bonjour service installed, or
+ * multicast blocked on the network). */
+async function probeHost(host) {
+  try {
+    const response = await fetch(`http://${host}:${PORT}/api/health`, {
+      signal: AbortSignal.timeout(600),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Prefers `courtside.local` (the mDNS name `integrations/mdns.ts` advertises
+ * server-side) over a LAN IPv4 address, since a link built from the name
+ * survives this machine's DHCP-assigned IP changing between matches, while
+ * one built from the IP does not. Actually probed rather than assumed —
+ * see probeHost — falling back to the first LAN address (today's
+ * behaviour) whenever the name doesn't resolve here.
+ *
+ * Retries rather than probing once: this runs right after the server logs
+ * "listening on port", which fires *before* the server even calls
+ * publishMdns() (see index.ts) — let alone before this OS's own
+ * multicast-DNS resolver has actually picked up the freshly-announced
+ * record, which takes a variable extra moment on top of that. Observed a
+ * single immediate probe fail this way on a real launch even though
+ * courtside.local resolved fine barely a second later.
+ */
+async function resolveDashboardHost() {
+  const attempts = 8;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await probeHost('courtside.local')) return 'courtside.local';
+    if (attempt < attempts - 1) await delay(500);
+  }
+  return lanAddresses()[0] ?? 'localhost';
 }
 
 function startServer(cfg) {
@@ -201,6 +254,16 @@ function startServer(cfg) {
     if (chunk.toString().includes('listening on port')) {
       serverState = { status: 'running', message: '' };
       notifyLauncher();
+      // mDNS advertising and this OS's own multicast-DNS resolver both need
+      // a moment after the server starts, so this runs once here rather
+      // than blocking the "server is running" notification above on it —
+      // the launcher/dashboard still work off the LAN IP in the meantime,
+      // then switch the moment this resolves.
+      dashboardHost = null;
+      void resolveDashboardHost().then((host) => {
+        dashboardHost = host;
+        notifyLauncher();
+      });
     }
   });
 
@@ -274,9 +337,13 @@ ipcMain.handle('create-tournament', (_event, name) =>
   apiRequest('/api/tournaments', { method: 'POST', body: JSON.stringify({ name }) }),
 );
 
-function openDashboard(tournament) {
+async function openDashboard(tournament) {
   if (!tournament) return;
-  const address = lanAddresses()[0] ?? 'localhost';
+  // Already resolved in the common case (see the 'listening on port'
+  // handler above) — only actually waits on a probe here if the dashboard
+  // is opened unusually fast after startup, or the first probe hasn't
+  // landed yet for some other reason.
+  const address = dashboardHost ?? (await resolveDashboardHost());
   // The admin dashboard picks this up once and stores it locally, so the
   // person running this app never has to see or type a password — it
   // still protects the API from anyone else on the LAN, who won't have it.

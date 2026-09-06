@@ -270,7 +270,13 @@
         statusEl.textContent =
           state.status === 'running' ? 'Running' : state.status === 'error' ? 'Error' : 'Starting…';
 
-        const address = state.addresses && state.addresses[0];
+        // Prefers the resolved courtside.local address (see
+        // resolveDashboardHost() in main.js) — it survives this machine's
+        // IP changing between matches, which the raw LAN address does not.
+        // Briefly null right after the server starts, while that's still
+        // being probed; the LAN address (already known immediately) fills
+        // in until then, then this switches over on its own.
+        const address = state.dashboardHost ?? (state.addresses && state.addresses[0]);
         addressCard.style.display = 'block';
         addressEl.textContent = address
           ? 'http://' + address + ':' + state.port

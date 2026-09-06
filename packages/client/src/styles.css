@@ -1372,6 +1372,27 @@ button.banner:active {
   margin-bottom: 0.5rem;
 }
 
+.admin-header-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.admin-header-row h1 {
+  margin-bottom: 0.5rem;
+}
+
+.language-switcher {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
 .admin-status {
   margin: 0;
 }

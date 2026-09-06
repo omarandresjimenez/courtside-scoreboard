@@ -691,6 +691,65 @@ exactly like no error appeared. Create match now has its own
 `matchStatus`, rendered right under its own submit button — no scrolling
 either way.
 
+## Later session — admin-only English/Spanish i18n, and courtside.local everywhere instead of a LAN IP
+
+**Admin dashboard is now bilingual (English/Spanish), the rest of the app
+untouched.** New `packages/client/src/i18n/`:
+
+- `locale.ts` — `detectLocale()` picks the browser's first supported
+  language from `navigator.languages` (matched on the primary subtag, so
+  `es-MX` and `es-ES` both resolve to `es`), falling back to English.
+- `en.ts` / `es.ts` — full string dictionaries for the admin screen, kept
+  from drifting apart by a test that fails on a missing key, a mismatched
+  `{{placeholder}}` between locales, or an empty string.
+- `useTranslation()` — deliberately **not** a Context provider. The
+  "current locale" is a pure function of `localStorage` (a stored
+  preference) falling back to the browser language, read via
+  `useSyncExternalStore`; every call site (AdminDashboard, and
+  `PlayerAutocomplete` separately) subscribes to the same source, so a
+  `setLocale()` call from the new language `<select>` in AdminDashboard's
+  header is reflected everywhere on the page immediately, with no provider
+  element needed anywhere in the tree.
+
+Every user-facing string in `AdminDashboard.tsx` and `PlayerAutocomplete.tsx`
+now goes through `t()` — English wording was kept character-for-character
+identical to what existed before, specifically so the entire pre-existing
+test suite kept passing unmodified (jsdom defaults to `en-US`). TV, Umpire,
+StreamViewer and the public viewer are all still English-only; that was a
+deliberate scope line, not an oversight.
+
+**`courtside.local` is now the address the whole app uses, not just the
+camera-broadcast link.** Traced back to exactly one place:
+`packages/desktop/src/main.js`'s `openDashboard()` picked the first LAN IPv4
+address and opened the admin dashboard there (via `shell.openExternal`),
+and every link the dashboard builds (TV, Umpire — via `absoluteUrl()`,
+`tvLinkFor()`, `umpireLinkFor()`) derives from `window.location.origin`.
+Fixing that one call site fixes all of them for free — none of those
+client-side functions needed to change.
+
+`main.js` now has `resolveDashboardHost()`, called once right after the
+server logs "listening on port": it probes `http://courtside.local:3000/api/health`
+for real (not just assumed reachable because the server publishes it — see
+`probeHost()`) and prefers it, falling back to the first LAN IPv4 address
+exactly as before whenever it doesn't resolve here. **Retries rather than
+probing once** — the server logs "listening on port" _before_ it even calls
+`publishMdns()` (see `index.ts`), and this OS's own multicast-DNS resolver
+needs a further moment beyond that to actually pick up the freshly-announced
+record. A single immediate probe was observed to fail on a real launch even
+though `courtside.local` resolved fine about a second later; up to 8
+attempts, 500ms apart, closes that gap. `launcher.html`'s displayed address
+now shows this resolved host too, once it lands (briefly shows the LAN IP
+until then, so the launcher is never blocked on the probe).
+
+**Known, not yet decided:** the "Trust this phone for camera streaming" QR
+(`/api/local-ca.pem`) inherits `courtside.local` the same way TV/Umpire
+links do, purely as a side effect of "everywhere" — but that link's only
+job is getting the CA onto a brand-new phone that hasn't trusted anything
+yet, and an IP address is arguably the more bulletproof choice for that one
+specific bootstrap step regardless of whether `.local` resolution works.
+Left as-is (flagged to the user, not yet acted on either way) — revisit if
+a phone that can otherwise reach the server fails specifically at this QR.
+
 ## Desktop app (`packages/desktop/`) — Electron wrapper
 
 **Why:** running the server required Node install + `npm install` + hand-

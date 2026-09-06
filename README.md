@@ -79,11 +79,13 @@ npm run start --workspace packages/server   # one process: API + Socket.io + the
 as static files once it exists, with any unmatched GET falling back to
 `index.html` — so a deep link like `/umpire/:matchId?token=...` still
 resolves after a hard refresh. This means umpire and TV devices only ever
-need one address: `http://<server's LAN IP>:3000`. `start` runs the
-server through `tsx` rather than a `tsc` build, since `@courtside/shared`
-is consumed as TypeScript source and `tsx` resolves that transparently at
-both dev and run time — there's nothing extra to compile for the server
-itself.
+need one address — `http://courtside.local:3000` where the network
+supports mDNS (the desktop launcher prefers this and probes it before
+using it, falling back to `http://<server's LAN IP>:3000` otherwise; see
+HANDOFF.md). `start` runs the server through `tsx` rather than a `tsc`
+build, since `@courtside/shared` is consumed as TypeScript source and
+`tsx` resolves that transparently at both dev and run time — there's
+nothing extra to compile for the server itself.
 
 A full step-by-step walkthrough for the network side (router, static IP,
 firewall, generating each match's QR codes, and a pre-match checklist)
@@ -166,7 +168,7 @@ npm run typecheck    # tsc --noEmit across every package
 npm test             # Jest --coverage in every package
 ```
 
-788 tests across the three packages (426 client / 220 server / 142
+819 tests across the three packages (457 client / 220 server / 142
 shared). Each package enforces its own coverage floor in its
 `jest.config.cjs` (`coverageThreshold`), ratcheted to what its suite
 actually achieves rather than a round number:
@@ -228,6 +230,13 @@ line-up's gender, discipline (singles/doubles), and any age cap (e.g.
 "U13") against the category being assigned, using whatever roster data is
 actually present. A tournament with no imported roster falls back to the
 original manual name-entry form untouched.
+
+The admin dashboard is bilingual (English/Spanish) — see
+`packages/client/src/i18n/`. It defaults to the browser's own language,
+falling back to English, and a language picker in the dashboard's header
+lets the admin override that, remembered for next time. Scoped to the admin
+screen only; the TV, umpire, stream-viewer and public-viewer screens are
+still English-only.
 
 Stubbed for the next pass: reassigning an _existing_ match to a court after
 the fact, and the admin `EDIT_MATCH_DETAILS` / `EDIT_SCORING_CONFIG` /

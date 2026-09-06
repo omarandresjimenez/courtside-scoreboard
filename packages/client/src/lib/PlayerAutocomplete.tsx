@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { TournamentPlayer } from '@courtside/shared';
+import { useTranslation } from '../i18n/useTranslation.js';
 
 export interface PlayerSelection {
   tournamentPlayerId: string;
@@ -42,6 +43,7 @@ export function PlayerAutocomplete({
   onChange,
   excludeIds = [],
 }: PlayerAutocompleteProps) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState(value?.displayName ?? '');
   const [isOpen, setIsOpen] = useState(false);
   const listboxId = useId();
@@ -96,7 +98,7 @@ export function PlayerAutocomplete({
           // own onMouseDown (below) commits the selection before the timeout
           // runs, so closing here doesn't race it away.
           onBlur={() => window.setTimeout(() => setIsOpen(false), 150)}
-          placeholder="Choose a player…"
+          placeholder={t('playerAutocomplete.placeholder')}
           autoComplete="off"
           spellCheck={false}
           required
