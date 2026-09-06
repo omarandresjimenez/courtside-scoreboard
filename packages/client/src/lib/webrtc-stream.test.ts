@@ -19,7 +19,7 @@ let fakeSocket = makeFakeSocket();
 const mockIo = jest.fn(() => fakeSocket);
 jest.mock('socket.io-client', () => ({ io: mockIo }));
 
-import { startBroadcasting, startViewing } from './webrtc-stream.js';
+import { startBroadcasting, startViewing, watchForMatchStart } from './webrtc-stream.js';
 
 class FakePeerConnection {
   static instances: FakePeerConnection[] = [];
@@ -143,6 +143,21 @@ describe('startBroadcasting', () => {
     handle.setVideoEnabled(true);
     expect(videoTrack.enabled).toBe(true);
     expect(fakeSocket.emit).toHaveBeenCalledWith(STREAM_EVENTS.PAUSED, { paused: false });
+  });
+
+  it('tells the caller when the server reports the match finalised', async () => {
+    const onMatchFinalized = jest.fn();
+    startBroadcasting('court1', stream, onMatchFinalized);
+
+    await fakeSocket.fire(STREAM_EVENTS.MATCH_FINALIZED);
+
+    expect(onMatchFinalized).toHaveBeenCalled();
+  });
+
+  it('does not throw when finalised with no callback given', async () => {
+    startBroadcasting('court1', stream);
+
+    await expect(fakeSocket.fire(STREAM_EVENTS.MATCH_FINALIZED)).resolves.toBeUndefined();
   });
 
   it('closes every peer and the socket on stop', async () => {
@@ -277,6 +292,34 @@ describe('startViewing', () => {
     handle.stop();
 
     expect(FakePeerConnection.instances[0]!.close).toHaveBeenCalled();
+    expect(fakeSocket.disconnect).toHaveBeenCalled();
+  });
+});
+
+describe('watchForMatchStart', () => {
+  it('connects as a standby listener for the court, opening no peer connection', () => {
+    watchForMatchStart('court1', jest.fn());
+    expect(mockIo).toHaveBeenCalledWith('/', {
+      query: { role: 'stream-standby', courtId: 'court1' },
+      transports: ['websocket'],
+    });
+    expect(FakePeerConnection.instances).toHaveLength(0);
+  });
+
+  it('tells the caller when the umpire starts the match', async () => {
+    const onMatchStarted = jest.fn();
+    watchForMatchStart('court1', onMatchStarted);
+
+    await fakeSocket.fire(STREAM_EVENTS.MATCH_STARTED);
+
+    expect(onMatchStarted).toHaveBeenCalled();
+  });
+
+  it('disconnects the socket on stop', () => {
+    const handle = watchForMatchStart('court1', jest.fn());
+
+    handle.stop();
+
     expect(fakeSocket.disconnect).toHaveBeenCalled();
   });
 });

@@ -97,6 +97,17 @@ export const STREAM_EVENTS = {
    * a viewer from a dark court. The paused state therefore has to travel as
    * its own signal, or the viewer shows black video with no explanation. */
   PAUSED: 'stream:paused',
+  /** Told to everyone in the court's stream room the moment the umpire
+   * finalises the match on it — the broadcaster acts on this by stopping
+   * transmission itself, since a court camera has nothing left worth
+   * sending once its match is over. */
+  MATCH_FINALIZED: 'stream:match_finalized',
+  /** Told to everyone in the court's stream room the moment the umpire
+   * starts the match on it — a phone sitting idle on that court's broadcast
+   * page, already holding camera permission from an earlier transmission,
+   * acts on this by starting itself with no tap needed. A phone that has
+   * never granted permission simply does nothing, same as today. */
+  MATCH_STARTED: 'stream:match_started',
 } as const;
 
 /** Sent by a peer: "deliver `data` to the peer identified by `targetId`". */

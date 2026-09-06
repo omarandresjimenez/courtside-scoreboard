@@ -20,3 +20,14 @@ if (typeof globalThis.crypto?.randomUUID !== 'function') {
     configurable: true,
   });
 }
+
+// jsdom has no layout engine, so it doesn't implement scrollIntoView at all
+// (calling it throws "not a function") — AdminDashboard scrolls its status
+// banner into view (see the statusRef effect), which every test that
+// triggers a status message would otherwise crash on.
+if (
+  typeof globalThis.HTMLElement !== 'undefined' &&
+  !globalThis.HTMLElement.prototype.scrollIntoView
+) {
+  globalThis.HTMLElement.prototype.scrollIntoView = function scrollIntoView() {};
+}

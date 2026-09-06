@@ -589,6 +589,108 @@ survives an app restart, just not a change in the IP itself.
 multicast; `MDNS_HOSTNAME` and `LOCAL_TLS_DIR` are both overridable — see
 the Configuration reference below.
 
+## Later session — admin dashboard reorganization, per-court broadcast link, and automatic start/stop
+
+**Admin dashboard reorganization.** The page had grown long enough that
+several pieces needed reworking:
+
+- **Match history** gained pagination — a rows-per-page `<select>` (10/20/50,
+  10 by default) above the table, Previous/Next controls below it once
+  there are more matches than fit on one page.
+- The history list's topline showed `matchType` _and_ `category` side by
+  side; every other screen (TV, Umpire, LAN Stream Viewer, public viewer)
+  already replaces "singles"/"doubles" with the category when one is set.
+  Fixed to match.
+- **Courts** became a single-open accordion (`<details>`/`<summary>`,
+  controlled by one `expandedCourtId` piece of state so opening one closes
+  whichever else was open) — collapsed by default, showing only the
+  court's name and Busy/Available status; everything else (join code, TV
+  link, public link, broadcast link) is behind the click. A small rotating
+  `.court-chevron` marks each row as expandable, since the flex layout
+  suppresses the browser's own disclosure triangle.
+- **Umpires** capped to a ~4-row scrollable list (`.umpire-list`, a
+  `max-height`/`overflow-y: auto` pair) instead of growing the page
+  indefinitely — the height is an estimate, worth a visual check on a real
+  screen.
+- **"Trust this phone for camera streaming"** moved from a standing card
+  above everything else to directly under Umpires, in its own collapsed-
+  by-default accordion (`.section-accordion-summary`/`.section-chevron` —
+  a generic version of the Courts pattern, for a single card rather than a
+  per-item list). Side effect worth knowing: it now only renders once a
+  tournament is selected, since Umpires (and the rest of that column) does.
+
+**Broadcast (camera) link moved from per-match to per-court.** It used to
+be regenerated and shown in the "created match" panel every time a new
+match started, labelled "Viewer link (internet)" even though — traced
+through `useMatchState`/`useStreamViewer.ts`/`webrtc-stream.ts`'s
+`startViewing` — it was LAN-only the whole time (Socket.io), not
+internet-facing at all; the actual internet-facing viewer is the separate
+Firebase-hosted `public-viewer`. Since `streamBroadcastLinkFor()` is keyed
+by `courtId`, not `matchId`, the URL itself never changes across matches on
+the same court — it now lives once, permanently, on each court's row in
+the Courts list (`.broadcast-link-row`), with a deliberately small
+(`size={32}`) QR code so a tournament running half a dozen-plus courts at
+once doesn't turn the list into a wall of QR codes. `StreamViewer.tsx`/
+`useStreamViewer.ts` and the LAN-viewer half of `webrtc-stream.ts`/
+`sockets/stream.ts` were left in place, unlinked, rather than deleted — an
+explicit choice in case that path gets a real use later.
+
+**`GET /api/config`** (new, public, unauthenticated — `routes/config.ts`)
+exposes `{ mdnsHostname, mdnsEnabled }` so the client never hardcodes or
+guesses a value that could drift from a customised `MDNS_HOSTNAME` env var.
+`streamBroadcastLinkFor()` prefers the advertised mDNS hostname over
+`window.location.hostname` when available, for the same reason the
+persistent cert above exists: an IP a phone already trusted can change
+between matches, `courtside.local` doesn't.
+
+**The court's camera now starts and stops itself with the match**, instead
+of relying on someone to remember to press the phone's Start/Stop button:
+
+- `STREAM_EVENTS.MATCH_FINALIZED` — the server (`sockets/index.ts`) emits
+  it to a court's stream room the moment the umpire finalises the match on
+  it (the same transition that flips `Match.status` to `COMPLETED`); the
+  broadcasting phone (`useCameraBroadcast.ts`) reacts by releasing the
+  camera and both peer meshes automatically, same as pressing Stop, with a
+  distinct on-screen notice ("Transmission stopped automatically…") instead
+  of the error styling.
+- `STREAM_EVENTS.MATCH_STARTED` — emitted the moment the umpire's first
+  serve flips the match to `IN_PROGRESS`. A phone sitting on a court's
+  broadcast page while idle now holds a lightweight, non-transmitting
+  **`stream-standby`** socket connection (`sockets/stream.ts` — joins the
+  room, no camera, no peer connections, no viewer/broadcaster bookkeeping)
+  just to hear this. On receiving it, the phone tries to start itself
+  silently. **This only works if that phone already holds camera
+  permission** for this origin — browsers won't prompt for a new
+  permission without a user gesture, so a phone that has never pressed
+  Start manually stays idle and needs the first press as before; there's
+  no visible error either way, since nothing was expected to happen
+  automatically on a phone that was never primed. This closes part of the
+  gap documented in STREAMING_UPGRADE.md §9.4 ("the broadcast does not
+  resume by itself") — specifically the "someone has to remember to press
+  Start" half; a restarted server or a phone that never granted permission
+  still needs a manual press, unchanged.
+
+**Team/country moved under Players, and auto-fill from the roster.** These
+used to be their own "Sides" fieldset ahead of Players, always manually
+typed. They now render directly under each side's player field(s) inside
+Players (`SIDE_SLOTS`, `.side-fieldset`), and — once a roster is imported —
+fill in automatically from the selected player's own `club`/`country`
+(`TournamentPlayer.club`/`.country`) the moment they're picked, rather than
+being retyped. Still fully editable: an admin's manual edit sticks unless a
+different player is subsequently picked for that side, and re-typing the
+player search (which clears the selection — see `PlayerAutocomplete`)
+leaves whatever was already filled in alone, since a mid-search state
+isn't "this side no longer has a team."
+
+**Create match's status feedback moved off the page-top banner.** The
+single `status` state at the top of the page (used by every admin action —
+add/remove court or umpire, copy a link, import a roster) is shared across
+what has become a long page; an error from Create match, at the bottom,
+rendered off-screen above wherever the admin was scrolled to, which looked
+exactly like no error appeared. Create match now has its own
+`matchStatus`, rendered right under its own submit button — no scrolling
+either way.
+
 ## Desktop app (`packages/desktop/`) — Electron wrapper
 
 **Why:** running the server required Node install + `npm install` + hand-

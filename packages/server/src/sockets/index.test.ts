@@ -2,7 +2,7 @@ import { createServer, type Server as HttpServer } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { Server as SocketIoServer } from 'socket.io';
 import { io as ioClient, type Socket as ClientSocket } from 'socket.io-client';
-import { SERVER_EVENTS, TV_EVENTS, UMPIRE_EVENTS } from '@courtside/shared';
+import { SERVER_EVENTS, STREAM_EVENTS, TV_EVENTS, UMPIRE_EVENTS } from '@courtside/shared';
 import { Prisma } from '../../generated/prisma/index.js';
 import { createFakePrisma } from '../testUtils/fakePrisma.js';
 
@@ -12,6 +12,7 @@ jest.mock('../db/client.js', () => ({ prisma: mockPrisma.prisma }));
 // After the mock, so registerSocketHandlers (and the replay engine it
 // calls) resolve '../db/client.js' to the fake above.
 import { createScoreEventIdempotent, registerSocketHandlers, roomForCourt } from './index.js';
+import { registerStreamSocketHandlers } from './stream.js';
 
 let httpServer: HttpServer;
 let io: SocketIoServer;
@@ -22,6 +23,7 @@ beforeAll(async () => {
   httpServer = createServer();
   io = new SocketIoServer(httpServer);
   registerSocketHandlers(io);
+  registerStreamSocketHandlers(io);
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
   port = (httpServer.address() as AddressInfo).port;
 });
@@ -350,6 +352,71 @@ describe('scoring over the socket', () => {
     expect(mockPrisma.prisma.match.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'COMPLETED' }) }),
     );
+  });
+
+  it('tells the court broadcaster to stop once the umpire finalises the match on it', async () => {
+    // Optimises real-time broadcasting: a phone left filming an empty court
+    // after its match ends has nothing left worth transmitting.
+    const match = mockPrisma.seedMatch({
+      umpireToken: 'tok-stream-fin',
+      pointsToWin: 1,
+      capScore: 2,
+      assignedCourtId: 'court-stream-1',
+    });
+    for (let i = 1; i <= 3; i += 1) {
+      mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(i) });
+    }
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-stream-fin' });
+    await waitFor(umpire, SERVER_EVENTS.MATCH_STATE);
+    const broadcaster = connect({ role: 'stream-broadcaster', courtId: 'court-stream-1' });
+    await waitFor(broadcaster, 'connect');
+
+    umpire.emit(UMPIRE_EVENTS.ADD_POINT, {
+      matchId: match.id,
+      eventId: 'ev-win-stream',
+      side: 'A',
+    });
+    await waitFor(umpire, SERVER_EVENTS.MATCH_STATE);
+
+    const finalizedNotice = waitFor(broadcaster, STREAM_EVENTS.MATCH_FINALIZED);
+    umpire.emit(UMPIRE_EVENTS.RETIRE_MATCH, {
+      matchId: match.id,
+      eventId: 'ev-final-stream',
+      winnerSide: 'A',
+    });
+
+    await expect(finalizedNotice).resolves.toBeUndefined();
+  });
+
+  it('tells a standby court phone to start itself once the umpire starts the match on it', async () => {
+    // Mirrors the finalise-side notification: lets a phone that already has
+    // camera permission begin transmitting the instant play starts, with no
+    // tap needed.
+    const match = mockPrisma.seedMatch({
+      umpireToken: 'tok-stream-start',
+      assignedCourtId: 'court-stream-2',
+    });
+    mockPrisma.seedPlayers(match.id, [
+      { side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+      { side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
+    ]);
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-stream-start' });
+    const initial = await waitFor<{
+      match: { players: Array<{ playerId: string; side: string }> };
+    }>(umpire, SERVER_EVENTS.MATCH_STATE);
+    const alice = initial.match.players.find((player) => player.side === 'A')!;
+    const standby = connect({ role: 'stream-standby', courtId: 'court-stream-2' });
+    await waitFor(standby, 'connect');
+
+    const startedNotice = waitFor(standby, STREAM_EVENTS.MATCH_STARTED);
+    umpire.emit(UMPIRE_EVENTS.START_SET, {
+      matchId: match.id,
+      eventId: 'ev-start-stream',
+      firstServerSide: 'A',
+      firstServerPlayerId: alice.playerId,
+    });
+
+    await expect(startedNotice).resolves.toBeUndefined();
   });
 
   it('reopens a match recorded COMPLETED that no longer has a finalising event', async () => {

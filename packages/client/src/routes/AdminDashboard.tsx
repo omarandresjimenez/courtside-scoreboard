@@ -28,6 +28,10 @@ const EMPTY_ROSTER_SELECTIONS: Record<PlayerSlot, PlayerSelection | null> = {
   b2: null,
 };
 
+/** Which player slots belong to which side — used to lay the match form out
+ * one column per side (player field(s), then that side's Team/Country). */
+const SIDE_SLOTS: Record<Side, PlayerSlot[]> = { A: ['a1', 'a2'], B: ['b1', 'b2'] };
+
 /** `File.text()` reads the same bytes but isn't implemented everywhere this
  * app's test environment runs — FileReader is the one CSV-reading path with
  * universal support (jsdom included). */
@@ -45,10 +49,6 @@ interface CreatedMatchLinks {
   courtLabel: string | null;
   umpireLink: string;
   umpireCode: string;
-  /** Court-side phone link — camera only, no score. */
-  streamBroadcastLink: string;
-  /** Internet-facing link — video plus the live score overlay. */
-  streamViewLink: string;
 }
 
 type MatchSummaryResponse = Partial<MatchSummary> &
@@ -172,21 +172,32 @@ function publicScoreLinkFor(court: Pick<Court, 'courtId'>): string {
   return `${PUBLIC_SCOREBOARD_ORIGIN}/?court=${encodeURIComponent(court.courtId)}`;
 }
 
-function streamBroadcastLinkFor(match: Pick<Match, 'assignedCourtId'>): string {
-  if (!match.assignedCourtId) return '#';
-  const path = `/stream/court/${match.assignedCourtId}`;
+/**
+ * The camera-capture link for a court — one stable URL for its whole
+ * lifetime, since it's keyed by courtId rather than any particular match.
+ * Whoever is filming keeps this open across matches; a new match on the
+ * same court doesn't need a new link.
+ *
+ * `mdnsHost` — `config.mdnsHostname` fetched from `GET /api/config`, or
+ * null while that request is still in flight or mDNS is disabled — is
+ * preferred over this browser's own address when available. The persistent,
+ * CA-signed cert (integrations/local-tls.ts) lists both as valid, but only
+ * the hostname survives the venue's DHCP handing out a different IP next
+ * time; a link built from `window.location.hostname` would need re-trusting
+ * the moment that happens even though the CA itself never changed.
+ */
+function streamBroadcastLinkFor(court: Pick<Court, 'courtId'>, mdnsHost: string | null): string {
+  const path = `/stream/court/${court.courtId}`;
   // Camera capture needs a secure context. If this dashboard itself was
   // opened over plain http:// (the Electron/production server, which has
-  // no TLS on its main port), point at the server's dedicated self-signed
-  // HTTPS listener instead — see config.ts's httpsPort and index.ts.
+  // no TLS on its main port), point at the server's dedicated HTTPS
+  // listener instead — see config.ts's httpsPort, index.ts, and
+  // integrations/local-tls.ts for the persistent, CA-signed cert that
+  // makes this a one-time browser warning instead of one per restart.
   if (window.location.protocol === 'https:') return absoluteUrl(path);
   const httpsPort = window.location.port ? Number(window.location.port) + 1 : 443;
-  return `https://${window.location.hostname}:${httpsPort}${path}`;
-}
-
-function streamViewLinkFor(match: Pick<Match, 'assignedCourtId'>): string {
-  if (!match.assignedCourtId) return '#';
-  return absoluteUrl(`/stream/live/court/${match.assignedCourtId}`);
+  const host = mdnsHost ?? window.location.hostname;
+  return `https://${host}:${httpsPort}${path}`;
 }
 
 /**
@@ -212,10 +223,15 @@ export function AdminDashboard() {
     return fromUrl || localStorage.getItem('courtside:adminPassword') || 'change-me';
   });
   const [matches, setMatches] = useState<MatchSummary[]>([]);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyPageSize, setHistoryPageSize] = useState(10);
   const [courts, setCourts] = useState<Court[]>([]);
   const [umpires, setUmpires] = useState<Umpire[]>([]);
   const [tournamentPlayers, setTournamentPlayers] = useState<TournamentPlayer[]>([]);
   const [isImportingRoster, setIsImportingRoster] = useState(false);
+  // Which court's detail panel is open, if any — closed by default, and
+  // opening one closes whatever else was open (see the courts list below).
+  const [expandedCourtId, setExpandedCourtId] = useState<string | null>(null);
   const [matchType, setMatchType] = useState<MatchType>('singles');
   const [preset, setPreset] = useState<ScoringPresetName>('standard');
   // First and family name are captured separately: scoreboards render
@@ -246,11 +262,35 @@ export function AdminDashboard() {
   });
   const [newCourtLabel, setNewCourtLabel] = useState('');
   const [status, setStatus] = useState<string | null>(null);
+  // Kept separate from `status` above: Create match sits far down what has
+  // become a long, multi-section page, so its own error/success feedback
+  // renders right under that section's form instead of at the top of the
+  // page, where an admin scrolled down to press the button would never see
+  // it without being scrolled back up.
+  const [matchStatus, setMatchStatus] = useState<string | null>(null);
   const [lastCreated, setLastCreated] = useState<CreatedMatchLinks | null>(null);
+  // Null until GET /api/config resolves (or if mDNS is disabled server-side)
+  // — streamBroadcastLinkFor falls back to this browser's own address in
+  // either case, so a broadcast link is never blocked on this fetch.
+  const [mdnsHostname, setMdnsHostname] = useState<string | null>(null);
 
   useEffect(() => {
     localStorage.setItem('courtside:adminPassword', adminPassword);
   }, [adminPassword]);
+
+  useEffect(() => {
+    // Public and unauthenticated — no admin password needed, so this can
+    // (and should) run before one is even known to be valid.
+    fetch('/api/config')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { mdnsHostname?: string; mdnsEnabled?: boolean } | null) => {
+        if (body?.mdnsEnabled) setMdnsHostname(body.mdnsHostname ?? null);
+      })
+      .catch(() => {
+        // A broadcast link still works via the browser's own address — this
+        // is purely an upgrade to a more durable one, never a requirement.
+      });
+  }, []);
 
   useEffect(() => {
     if (tournamentId) localStorage.setItem('courtside:tournamentId', tournamentId);
@@ -469,7 +509,7 @@ export function AdminDashboard() {
   async function createMatch(e: React.FormEvent) {
     e.preventDefault();
     if (isCreating) return;
-    setStatus(null);
+    setMatchStatus(null);
     setLastCreated(null);
     setIsCreating(true);
     try {
@@ -495,7 +535,7 @@ export function AdminDashboard() {
     if (hasRoster) {
       const missingSlot = slots.find((key) => !rosterSelections[key]);
       if (missingSlot) {
-        setStatus('Pick every player from the list before creating the match.');
+        setMatchStatus('Pick every player from the list before creating the match.');
         return;
       }
       players = slots.map((key) => ({
@@ -532,11 +572,11 @@ export function AdminDashboard() {
     });
 
     if (!res.ok) {
-      setStatus(await readErrorMessage(res, 'Failed to create match.'));
+      setMatchStatus(await readErrorMessage(res, 'Failed to create match.'));
       return;
     }
     const created = (await res.json()) as { match: Match };
-    setStatus('Match created.');
+    setMatchStatus('Match created.');
     setLastCreated({
       matchId: created.match.matchId,
       courtLabel:
@@ -550,8 +590,6 @@ export function AdminDashboard() {
         null,
       umpireLink: umpireLinkFor(created.match),
       umpireCode: created.match.umpireCode,
-      streamBroadcastLink: streamBroadcastLinkFor(created.match),
-      streamViewLink: streamViewLinkFor(created.match),
     });
     setNames({
       a1: { first: '', last: '' },
@@ -567,6 +605,19 @@ export function AdminDashboard() {
     void refreshMatches();
     void refreshCourts();
   }
+
+  // The server already returns matches newest-first (see GET /api/matches),
+  // so pagination here is a plain slice — no re-sorting needed. Clamped
+  // rather than stored pre-validated: the match list can shrink or grow
+  // between the 5-second polls that drive it, and a stale page number would
+  // otherwise render an empty page instead of quietly settling on the last
+  // real one.
+  const historyPageCount = Math.max(1, Math.ceil(matches.length / historyPageSize));
+  const currentHistoryPage = Math.min(historyPage, historyPageCount - 1);
+  const paginatedMatches = matches.slice(
+    currentHistoryPage * historyPageSize,
+    (currentHistoryPage + 1) * historyPageSize,
+  );
 
   return (
     <main className="admin-dashboard">
@@ -588,43 +639,6 @@ export function AdminDashboard() {
           {status}
         </p>
       )}
-
-      <section className="admin-card trust-camera-card">
-        <h2>Trust this phone for camera streaming</h2>
-        <p className="section-hint">
-          The camera page needs a secure connection, so browsers show a one-time security warning
-          the first time a phone opens it. Scan this once per phone that will ever film a match —
-          after that, the warning won&rsquo;t come back, even across restarts or a different court.
-        </p>
-        <div className="trust-camera-body">
-          <figure className="qr-code">
-            <QRCodeSVG
-              value={absoluteUrl('/api/local-ca.pem')}
-              size={96}
-              bgColor="#ffffff"
-              fgColor="#0a0e1a"
-              marginSize={1}
-              title="QR code to install this server's camera-streaming certificate"
-            />
-            <figcaption>Scan on the filming phone</figcaption>
-          </figure>
-          <details>
-            <summary>Show install steps</summary>
-            <ol className="trust-camera-steps">
-              <li>
-                <strong>iPhone:</strong> tap the downloaded profile, then Settings → General → VPN
-                &amp; Device Management → tap it again → Install. Then Settings → General → About →
-                Certificate Trust Settings → turn on full trust for &ldquo;Courtside Scoreboard
-                Local CA&rdquo;.
-              </li>
-              <li>
-                <strong>Android:</strong> tap the downloaded file, choose &ldquo;CA
-                certificate&rdquo; when asked what kind of certificate this is.
-              </li>
-            </ol>
-          </details>
-        </div>
-      </section>
 
       {tournamentId && (
         <section className="admin-card roster-import-card">
@@ -695,78 +709,144 @@ export function AdminDashboard() {
               {courts.length === 0 ? (
                 <p>No courts yet — add one above, then its TV link appears here.</p>
               ) : (
-                <ul className="court-list">
+                <ul className="court-list court-accordion">
                   {courts.map((c) => (
                     <li key={c.courtId}>
-                      <div className="court-row-info">
-                        <span>{c.label}</span>
-                        {/* Derived from the polled match list, not
-                            Court.currentMatchId: that field only ever gets
-                            set (at match creation) and never cleared, so a
-                            court that has ever hosted a match would show
-                            "busy" forever, even long after that match
-                            finished. occupiedCourtIds — already the source
-                            of truth for disabling this same court in the
-                            "Create match" dropdown below — reflects whether
-                            a CREATED/IN_PROGRESS match is on it right now. */}
-                        <span className="status-tag">
-                          {occupiedCourtIds.has(c.courtId) ? 'Busy' : 'Available'}
-                        </span>
-                        <span>
-                          Code on <a href="/tv">/tv</a>:{' '}
-                          <strong className="join-code">{c.tvCode}</strong>
-                        </span>
-                      </div>
-                      <div className="court-row-actions">
-                        <input
-                          aria-label="TV link"
-                          readOnly
-                          value={tvLinkFor(c)}
-                          onFocus={(e) => e.target.select()}
-                        />
-                        {/* Labelled rather than left as a bare "Copy": there are
+                      {/* A native <details>, controlled rather than
+                          uncontrolled: `open` always reflects whether *this*
+                          court is the expanded one, so opening a different
+                          court's panel closes this one on the next render —
+                          "only one at a time" falls out of that for free,
+                          with no extra bookkeeping beyond the single
+                          expandedCourtId this whole list shares. */}
+                      <details
+                        open={expandedCourtId === c.courtId}
+                        onToggle={(e) => {
+                          const isOpen = (e.target as HTMLDetailsElement).open;
+                          setExpandedCourtId(isOpen ? c.courtId : null);
+                        }}
+                      >
+                        {/* Everything a glance needs, and nothing else — the
+                            detail below (join code, links, QR, Remove) is
+                            exactly what "detailed info" meant to hide. */}
+                        <summary className="court-summary">
+                          {/* Purely decorative — the status tag and the
+                              summary's own cursor/hover already say
+                              "clickable"; this just makes it visible at a
+                              glance that the row expands. */}
+                          <span className="court-chevron" aria-hidden="true">
+                            ▸
+                          </span>
+                          <span>{c.label}</span>
+                          {/* Derived from the polled match list, not
+                              Court.currentMatchId: that field only ever gets
+                              set (at match creation) and never cleared, so a
+                              court that has ever hosted a match would show
+                              "busy" forever, even long after that match
+                              finished. occupiedCourtIds — already the source
+                              of truth for disabling this same court in the
+                              "Create match" dropdown below — reflects
+                              whether a CREATED/IN_PROGRESS match is on it
+                              right now. */}
+                          <span className="status-tag">
+                            {occupiedCourtIds.has(c.courtId) ? 'Busy' : 'Available'}
+                          </span>
+                        </summary>
+                        <div className="court-details-body">
+                          <div className="court-row-info">
+                            <span>
+                              Code on <a href="/tv">/tv</a>:{' '}
+                              <strong className="join-code">{c.tvCode}</strong>
+                            </span>
+                          </div>
+                          <div className="court-row-actions">
+                            <input
+                              aria-label="TV link"
+                              readOnly
+                              value={tvLinkFor(c)}
+                              onFocus={(e) => e.target.select()}
+                            />
+                            {/* Labelled rather than left as a bare "Copy": there are
                             two copy buttons per court now, and by voice alone
                             they were indistinguishable. */}
-                        <button
-                          type="button"
-                          aria-label={`Copy TV link for ${c.label}`}
-                          onClick={() => void handleCopy(tvLinkFor(c))}
-                        >
-                          Copy
-                        </button>
-                        <button
-                          type="button"
-                          className="danger-button"
-                          onClick={() => void deleteCourt(c.courtId)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                      {/* Kept visually distinct from the LAN links above: this
+                            <button
+                              type="button"
+                              aria-label={`Copy TV link for ${c.label}`}
+                              onClick={() => void handleCopy(tvLinkFor(c))}
+                            >
+                              Copy
+                            </button>
+                            <button
+                              type="button"
+                              className="danger-button"
+                              onClick={() => void deleteCourt(c.courtId)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          {/* Kept visually distinct from the LAN links above: this
                           is the one address that leaves the venue, so mixing it
                           in unlabelled invites sharing a 192.168.x link with
                           someone at home (or this one with the TV). */}
-                      <div className="court-row-actions public-link-row">
-                        <span
-                          className="public-link-label"
-                          title="Anyone on the internet can open this"
-                        >
-                          🌐 Public score
-                        </span>
-                        <input
-                          aria-label="Public internet scoreboard link"
-                          readOnly
-                          value={publicScoreLinkFor(c)}
-                          onFocus={(e) => e.target.select()}
-                        />
-                        <button
-                          type="button"
-                          aria-label={`Copy public internet link for ${c.label}`}
-                          onClick={() => void handleCopy(publicScoreLinkFor(c))}
-                        >
-                          Copy
-                        </button>
-                      </div>
+                          <div className="court-row-actions public-link-row">
+                            <span
+                              className="public-link-label"
+                              title="Anyone on the internet can open this"
+                            >
+                              🌐 Public score
+                            </span>
+                            <input
+                              aria-label="Public internet scoreboard link"
+                              readOnly
+                              value={publicScoreLinkFor(c)}
+                              onFocus={(e) => e.target.select()}
+                            />
+                            <button
+                              type="button"
+                              aria-label={`Copy public internet link for ${c.label}`}
+                              onClick={() => void handleCopy(publicScoreLinkFor(c))}
+                            >
+                              Copy
+                            </button>
+                          </div>
+                          {/* One stable link per court (see streamBroadcastLinkFor)
+                          rather than a new one shown per match — whoever is
+                          filming keeps this page open across matches on this
+                          court. QR is deliberately small: a tournament can
+                          have well over half a dozen courts live at once, and
+                          a full-size code per court would make this list
+                          impossible to scan at a glance. */}
+                          <div className="court-row-actions broadcast-link-row">
+                            <span className="public-link-label" title="Opens the camera on a phone">
+                              📷 Broadcast
+                            </span>
+                            <input
+                              aria-label="Broadcast link (court phone)"
+                              readOnly
+                              value={streamBroadcastLinkFor(c, mdnsHostname)}
+                              onFocus={(e) => e.target.select()}
+                            />
+                            <button
+                              type="button"
+                              aria-label={`Copy broadcast link for ${c.label}`}
+                              onClick={() =>
+                                void handleCopy(streamBroadcastLinkFor(c, mdnsHostname))
+                              }
+                            >
+                              Copy
+                            </button>
+                            <QRCodeSVG
+                              value={streamBroadcastLinkFor(c, mdnsHostname)}
+                              size={32}
+                              bgColor="#ffffff"
+                              fgColor="#0a0e1a"
+                              marginSize={1}
+                              className="broadcast-qr"
+                              title={`QR code for the broadcast link to ${c.label}`}
+                            />
+                          </div>
+                        </div>
+                      </details>
                     </li>
                   ))}
                 </ul>
@@ -801,7 +881,7 @@ export function AdminDashboard() {
               {umpires.length === 0 ? (
                 <p>No umpires yet — add one above to assign them to matches.</p>
               ) : (
-                <ul className="court-list">
+                <ul className="court-list umpire-list">
                   {umpires.map((u) => {
                     const busy = occupiedUmpireIds.has(u.umpireId);
                     return (
@@ -824,6 +904,56 @@ export function AdminDashboard() {
                   })}
                 </ul>
               )}
+            </section>
+
+            <section className="admin-card trust-camera-card">
+              {/* Closed by default, same as the Courts accordion above — this
+                  is a one-time-per-phone setup step, not something an admin
+                  needs open while running a tournament. */}
+              <details>
+                <summary className="section-accordion-summary">
+                  <span className="section-chevron" aria-hidden="true">
+                    ▸
+                  </span>
+                  <h2>Trust this phone for camera streaming</h2>
+                </summary>
+                <div className="section-accordion-body">
+                  <p className="section-hint">
+                    The camera page needs a secure connection, so browsers show a one-time security
+                    warning the first time a phone opens it. Scan this once per phone that will ever
+                    film a match — after that, the warning won&rsquo;t come back, even across
+                    restarts or a different court.
+                  </p>
+                  <div className="trust-camera-body">
+                    <figure className="qr-code">
+                      <QRCodeSVG
+                        value={absoluteUrl('/api/local-ca.pem')}
+                        size={96}
+                        bgColor="#ffffff"
+                        fgColor="#0a0e1a"
+                        marginSize={1}
+                        title="QR code to install this server's camera-streaming certificate"
+                      />
+                      <figcaption>Scan on the filming phone</figcaption>
+                    </figure>
+                    <details>
+                      <summary>Show install steps</summary>
+                      <ol className="trust-camera-steps">
+                        <li>
+                          <strong>iPhone:</strong> tap the downloaded profile, then Settings →
+                          General → VPN &amp; Device Management → tap it again → Install. Then
+                          Settings → General → About → Certificate Trust Settings → turn on full
+                          trust for &ldquo;Courtside Scoreboard Local CA&rdquo;.
+                        </li>
+                        <li>
+                          <strong>Android:</strong> tap the downloaded file, choose &ldquo;CA
+                          certificate&rdquo; when asked what kind of certificate this is.
+                        </li>
+                      </ol>
+                    </details>
+                  </div>
+                </div>
+              </details>
             </section>
           </div>
 
@@ -950,127 +1080,146 @@ export function AdminDashboard() {
               </fieldset>
 
               <fieldset>
-                <legend>Sides</legend>
-                <p className="field-hint">
-                  Team and country are optional — club play usually has neither.
-                </p>
-                <div className="match-team-fields">
-                  {(['A', 'B'] as const).map((side) => (
-                    <fieldset key={side} className={`team-fieldset side-${side.toLowerCase()}`}>
-                      <legend>Side {side} team</legend>
-                      <label>
-                        Team
-                        <input
-                          value={teams[side].name}
-                          onChange={(e) =>
-                            setTeams((current) => ({
-                              ...current,
-                              [side]: { ...current[side], name: e.target.value },
-                            }))
-                          }
-                          placeholder="Optional…"
-                          autoComplete="off"
-                          spellCheck={false}
-                        />
-                      </label>
-                      <label>
-                        Country
-                        <input
-                          value={teams[side].country}
-                          onChange={(e) =>
-                            setTeams((current) => ({
-                              ...current,
-                              [side]: { ...current[side], country: e.target.value },
-                            }))
-                          }
-                          placeholder="Optional…"
-                          autoComplete="off"
-                          spellCheck={false}
-                        />
-                      </label>
-                    </fieldset>
-                  ))}
-                </div>
-              </fieldset>
-
-              <fieldset>
                 <legend>Players</legend>
-                <div className="match-player-fields">
-                  {(
-                    [
-                      ['a1', 'Side A player 1'],
-                      ['b1', 'Side B player 1'],
-                      ['a2', 'Side A player 2'],
-                      ['b2', 'Side B player 2'],
-                    ] as const
-                  )
-                    .filter(([key]) => matchType === 'doubles' || !key.endsWith('2'))
-                    .map(([key, legend]) =>
-                      hasRoster ? (
-                        // Once a roster has been imported, players are found
-                        // by name instead of typed — see PlayerAutocomplete —
-                        // so this slot can't fall out of sync with a roster
-                        // row that no longer exists or was never selected.
-                        <fieldset key={key} className="player-fieldset">
-                          <legend>{legend}</legend>
-                          <PlayerAutocomplete
-                            label={legend}
-                            roster={rosterForCategory}
-                            value={rosterSelections[key]}
-                            onChange={(selection) =>
-                              setRosterSelections((current) => ({ ...current, [key]: selection }))
+                {/* Team and country used to be their own "Sides" fieldset
+                    ahead of Players; now they sit right under the player(s)
+                    they belong to on each side, and — once a roster is
+                    active — fill in from that player's own club/country
+                    instead of being retyped. */}
+                <p className="field-hint">
+                  {hasRoster
+                    ? "Team and country fill in automatically from the selected player's roster " +
+                      'record — edit them if this pairing doesn’t match it.'
+                    : 'Team and country are optional — club play usually has neither.'}
+                </p>
+                <div className="match-sides-fields">
+                  {(['A', 'B'] as const).map((side) => (
+                    <div key={side} className={`side-fieldset side-${side.toLowerCase()}`}>
+                      {SIDE_SLOTS[side]
+                        .filter((key) => matchType === 'doubles' || !key.endsWith('2'))
+                        .map((key) => {
+                          const legend = `Side ${side} player ${key.endsWith('2') ? 2 : 1}`;
+                          return hasRoster ? (
+                            // Once a roster has been imported, players are found
+                            // by name instead of typed — see PlayerAutocomplete —
+                            // so this slot can't fall out of sync with a roster
+                            // row that no longer exists or was never selected.
+                            <fieldset key={key} className="player-fieldset">
+                              <legend>{legend}</legend>
+                              <PlayerAutocomplete
+                                label={legend}
+                                roster={rosterForCategory}
+                                value={rosterSelections[key]}
+                                onChange={(selection) => {
+                                  setRosterSelections((current) => ({
+                                    ...current,
+                                    [key]: selection,
+                                  }));
+                                  // Auto-fill this side's Team/Country from
+                                  // the player's own roster record — see the
+                                  // field-hint above. Left alone on a cleared
+                                  // selection: the admin is mid-search, not
+                                  // saying this side no longer has a team.
+                                  if (!selection) return;
+                                  const player = tournamentPlayers.find(
+                                    (p) => p.tournamentPlayerId === selection.tournamentPlayerId,
+                                  );
+                                  if (!player) return;
+                                  setTeams((current) => ({
+                                    ...current,
+                                    [side]: {
+                                      name: player.club ?? '',
+                                      country: player.country ?? '',
+                                    },
+                                  }));
+                                }}
+                                excludeIds={Object.entries(rosterSelections)
+                                  .filter(([slot]) => slot !== key)
+                                  .map(([, selection]) => selection?.tournamentPlayerId)
+                                  .filter((id): id is string => Boolean(id))}
+                              />
+                            </fieldset>
+                          ) : (
+                            <fieldset key={key} className="player-fieldset">
+                              <legend>{legend}</legend>
+                              {/* Wrapper, not the fieldset itself: a flex/grid
+                                  fieldset turns its legend into a layout item and
+                                  pulls it out of the border gap. */}
+                              <div className="field-row">
+                                <label>
+                                  First name
+                                  <input
+                                    aria-label={`${legend} first name`}
+                                    value={names[key].first}
+                                    onChange={(e) =>
+                                      setNames((current) => ({
+                                        ...current,
+                                        [key]: { ...current[key], first: e.target.value },
+                                      }))
+                                    }
+                                    /* Not the operator's own name, so browser
+                                     autofill would offer the wrong person entirely. */
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    required
+                                  />
+                                </label>
+                                <label>
+                                  Last name
+                                  <input
+                                    aria-label={`${legend} last name`}
+                                    value={names[key].last}
+                                    onChange={(e) =>
+                                      setNames((current) => ({
+                                        ...current,
+                                        [key]: { ...current[key], last: e.target.value },
+                                      }))
+                                    }
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    required
+                                  />
+                                </label>
+                              </div>
+                            </fieldset>
+                          );
+                        })}
+
+                      <fieldset className={`team-fieldset side-${side.toLowerCase()}`}>
+                        <legend>Side {side} team</legend>
+                        <label>
+                          Team
+                          <input
+                            value={teams[side].name}
+                            onChange={(e) =>
+                              setTeams((current) => ({
+                                ...current,
+                                [side]: { ...current[side], name: e.target.value },
+                              }))
                             }
-                            excludeIds={Object.entries(rosterSelections)
-                              .filter(([slot]) => slot !== key)
-                              .map(([, selection]) => selection?.tournamentPlayerId)
-                              .filter((id): id is string => Boolean(id))}
+                            placeholder="Optional…"
+                            autoComplete="off"
+                            spellCheck={false}
                           />
-                        </fieldset>
-                      ) : (
-                        <fieldset key={key} className="player-fieldset">
-                          <legend>{legend}</legend>
-                          {/* Wrapper, not the fieldset itself: a flex/grid
-                              fieldset turns its legend into a layout item and
-                              pulls it out of the border gap. */}
-                          <div className="field-row">
-                            <label>
-                              First name
-                              <input
-                                aria-label={`${legend} first name`}
-                                value={names[key].first}
-                                onChange={(e) =>
-                                  setNames((current) => ({
-                                    ...current,
-                                    [key]: { ...current[key], first: e.target.value },
-                                  }))
-                                }
-                                /* Not the operator's own name, so browser
-                                 autofill would offer the wrong person entirely. */
-                                autoComplete="off"
-                                spellCheck={false}
-                                required
-                              />
-                            </label>
-                            <label>
-                              Last name
-                              <input
-                                aria-label={`${legend} last name`}
-                                value={names[key].last}
-                                onChange={(e) =>
-                                  setNames((current) => ({
-                                    ...current,
-                                    [key]: { ...current[key], last: e.target.value },
-                                  }))
-                                }
-                                autoComplete="off"
-                                spellCheck={false}
-                                required
-                              />
-                            </label>
-                          </div>
-                        </fieldset>
-                      ),
-                    )}
+                        </label>
+                        <label>
+                          Country
+                          <input
+                            value={teams[side].country}
+                            onChange={(e) =>
+                              setTeams((current) => ({
+                                ...current,
+                                [side]: { ...current[side], country: e.target.value },
+                              }))
+                            }
+                            placeholder="Optional…"
+                            autoComplete="off"
+                            spellCheck={false}
+                          />
+                        </label>
+                      </fieldset>
+                    </div>
+                  ))}
                 </div>
               </fieldset>
 
@@ -1079,6 +1228,16 @@ export function AdminDashboard() {
                   {isCreating ? 'Creating…' : 'Create match'}
                 </button>
               </div>
+              {/* Its own feedback, separate from the page-wide `status` banner
+                  at the top: this section sits far down a long page, and an
+                  admin who scrolled here to press the button shouldn't be
+                  pulled back to the top (or need to scroll there themselves)
+                  to see whether it worked. */}
+              {matchStatus && (
+                <p role="status" className="admin-status match-status">
+                  {matchStatus}
+                </p>
+              )}
             </form>
 
             {lastCreated && (
@@ -1122,69 +1281,11 @@ export function AdminDashboard() {
                 <button type="button" onClick={() => void handleCopy(lastCreated.umpireLink)}>
                   Copy umpire link
                 </button>
-
-                <p className="stream-links-heading">
-                  Video streaming — two separate links, give each to the right person:
-                </p>
-
-                <div className="stream-handoff">
-                  <div className="stream-handoff-details">
-                    <p>Give this to whoever is filming at the court (camera only, no score):</p>
-                    <label>
-                      Broadcast link (court phone)
-                      <input
-                        readOnly
-                        value={lastCreated.streamBroadcastLink}
-                        onFocus={(e) => e.target.select()}
-                      />
-                    </label>
-                  </div>
-                  <figure className="qr-code">
-                    <QRCodeSVG
-                      value={lastCreated.streamBroadcastLink}
-                      size={64}
-                      bgColor="#ffffff"
-                      fgColor="#0a0e1a"
-                      marginSize={1}
-                      title={`QR code for the broadcast link to match ${lastCreated.matchId}`}
-                    />
-                    <figcaption>Broadcast</figcaption>
-                  </figure>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void handleCopy(lastCreated.streamBroadcastLink)}
-                >
-                  Copy broadcast link
-                </button>
-
-                <div className="stream-handoff">
-                  <div className="stream-handoff-details">
-                    <p>Give this to anyone who wants to watch (video plus live score):</p>
-                    <label>
-                      Viewer link (internet)
-                      <input
-                        readOnly
-                        value={lastCreated.streamViewLink}
-                        onFocus={(e) => e.target.select()}
-                      />
-                    </label>
-                  </div>
-                  <figure className="qr-code">
-                    <QRCodeSVG
-                      value={lastCreated.streamViewLink}
-                      size={64}
-                      bgColor="#ffffff"
-                      fgColor="#0a0e1a"
-                      marginSize={1}
-                      title={`QR code for the viewer link to match ${lastCreated.matchId}`}
-                    />
-                    <figcaption>Viewer</figcaption>
-                  </figure>
-                </div>
-                <button type="button" onClick={() => void handleCopy(lastCreated.streamViewLink)}>
-                  Copy viewer link
-                </button>
+                {/* No streaming links here anymore — the broadcast link is
+                    the same URL for every match on a court (it's keyed by
+                    courtId, not matchId), so it now lives once, permanently,
+                    in the Courts list below instead of being regenerated
+                    and shown here every time a new match starts. */}
               </div>
             )}
           </section>
@@ -1193,12 +1294,33 @@ export function AdminDashboard() {
 
       {tournamentId && (
         <>
-          <h2>Match history</h2>
+          <div className="history-header">
+            <h2>Match history</h2>
+            {matches.length > 0 && (
+              <label className="history-page-size">
+                Rows per page
+                <select
+                  value={historyPageSize}
+                  onChange={(e) => {
+                    setHistoryPageSize(Number(e.target.value));
+                    // A different page size makes the old page number mean
+                    // something else entirely — start back at the top
+                    // rather than land on a now-arbitrary slice.
+                    setHistoryPage(0);
+                  }}
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+              </label>
+            )}
+          </div>
           <ul className="history-list">
             {matches.length === 0 ? (
               <li className="empty-state">No matches yet.</li>
             ) : (
-              matches.map((m) =>
+              paginatedMatches.map((m) =>
                 (() => {
                   const courtName =
                     m.courtLabel ??
@@ -1210,8 +1332,12 @@ export function AdminDashboard() {
                   return (
                     <li key={m.matchId}>
                       <div className="history-topline">
-                        <strong>{m.matchType}</strong>
-                        {m.category && <span className="category-tag">{m.category}</span>}
+                        {/* Same category ?? matchType fallback as the TV,
+                            umpire and stream-viewer screens: the category
+                            already implies "singles"/"doubles" when set, so
+                            it replaces that label instead of sitting beside
+                            it — this list used to show both at once. */}
+                        <span className="category-tag">{m.category ?? m.matchType}</span>
                         <span className="status-tag">{displayStatus(m)}</span>
                       </div>
                       <small>
@@ -1263,6 +1389,27 @@ export function AdminDashboard() {
               )
             )}
           </ul>
+          {matches.length > historyPageSize && (
+            <div className="history-pagination">
+              <button
+                type="button"
+                onClick={() => setHistoryPage((page) => Math.max(0, page - 1))}
+                disabled={currentHistoryPage === 0}
+              >
+                ← Previous
+              </button>
+              <span>
+                Page {currentHistoryPage + 1} of {historyPageCount}
+              </span>
+              <button
+                type="button"
+                onClick={() => setHistoryPage((page) => Math.min(historyPageCount - 1, page + 1))}
+                disabled={currentHistoryPage >= historyPageCount - 1}
+              >
+                Next →
+              </button>
+            </div>
+          )}
         </>
       )}
     </main>

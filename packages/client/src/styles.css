@@ -228,6 +228,13 @@ legend {
   font-weight: 600;
 }
 
+/* Informational, not a failure — e.g. a broadcast that stopped itself
+   because the match finished, not because something went wrong. */
+.field-notice {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .join-code {
   font-family: ui-monospace, monospace;
   font-size: 1.05rem;
@@ -1024,14 +1031,13 @@ button.banner:active {
   letter-spacing: 0.04em;
 }
 
-.match-team-fields {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+/* Each side's player field(s) stacked above that side's Team/Country
+   fields — team and country live right under the player they belong to
+   now, instead of a separate fieldset ahead of Players. */
+.side-fieldset {
+  display: flex;
+  flex-direction: column;
   gap: 0.75rem;
-  /* Without an explicit full width, this grid can share a flex-wrap line
-     with the narrower fields above it (Court, Umpire) instead of always
-     starting its own row below them. */
-  width: 100%;
 }
 
 .team-fieldset {
@@ -1370,6 +1376,12 @@ button.banner:active {
   margin: 0;
 }
 
+/* Create match's own feedback, right under its submit button instead of at
+   the top of the page — see the matchStatus state in AdminDashboard. */
+.match-status {
+  margin-top: 0.6rem;
+}
+
 .tournament-date {
   margin: -0.5rem 0 0.5rem;
   color: var(--accent);
@@ -1424,7 +1436,9 @@ button.banner:active {
   margin-bottom: 0;
 }
 
-.match-player-fields {
+/* One column per side (A, B) — each holding that side's player field(s)
+   followed by its Team/Country fields, see .side-fieldset. */
+.match-sides-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
@@ -1473,7 +1487,7 @@ button.banner:active {
 }
 
 /* Forced onto its own full-width line (row 1: name, status, join code) —
-   same width:100% technique as .match-team-fields, so it never shares a
+   same width:100% technique as .match-sides-fields, so it never shares a
    line with .court-row-actions below it, regardless of how much space
    either would fit in on its own. */
 .court-row-info {
@@ -1518,6 +1532,37 @@ button.banner:active {
 .public-link-row input {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* Row 4: the broadcast (camera) link — same tinted-row treatment as the
+   public link above, in the accent color instead of green so the two don't
+   read as the same kind of thing at a glance. */
+.broadcast-link-row {
+  margin-top: 0.4rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px dashed rgba(34, 211, 238, 0.35);
+  border-radius: var(--radius-sm);
+  background: rgba(34, 211, 238, 0.05);
+}
+
+.broadcast-link-row .public-link-label {
+  color: var(--accent);
+}
+
+.broadcast-link-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Deliberately tiny: a tournament can have well over half a dozen courts
+   live at once, and a scannable-from-across-the-room QR per court would
+   make this list unusable. Small is enough for someone holding the phone
+   right up to the screen, which is the actual use case here. */
+.broadcast-qr {
+  flex-shrink: 0;
+  border-radius: 0.2rem;
+  background: #ffffff;
+  padding: 0.15rem;
 }
 
 .court-row-actions input {
@@ -2059,7 +2104,7 @@ button.banner:active {
     width: 100%;
   }
 
-  .match-player-fields {
+  .match-sides-fields {
     grid-template-columns: 1fr;
   }
 
@@ -2339,9 +2384,10 @@ button.banner:active {
    Match category (e.g. "BS U19")
    --------------------------------------------------------------------------- */
 
-/* In the admin history list, beside the match type and status. Deliberately
-   quieter than .status-tag: the category identifies the match, it does not
-   report anything changing. */
+/* In the admin history list, in place of the match type (singles/doubles),
+   which a category already implies — same replacement the TV, umpire and
+   stream-viewer screens make. Deliberately quieter than .status-tag: this
+   identifies the match, it does not report anything changing. */
 .category-tag {
   display: inline-flex;
   align-items: center;
@@ -2565,6 +2611,45 @@ button[aria-busy='true'] {
    Trust this phone for camera streaming
    --------------------------------------------------------------------------- */
 
+/* Generic — not court-specific like .court-summary/.court-chevron — for any
+   single collapsible admin card whose whole <h2> should be the click target,
+   as opposed to Courts' per-item accordion list. */
+.section-accordion-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.section-accordion-summary::-webkit-details-marker {
+  display: none;
+}
+
+.section-accordion-summary h2 {
+  margin: 0;
+}
+
+.section-accordion-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.section-chevron {
+  display: inline-block;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  transition: transform 0.15s ease;
+}
+
+details[open] > .section-accordion-summary > .section-chevron {
+  transform: rotate(90deg);
+}
+
+.section-accordion-body {
+  margin-top: 0.75rem;
+}
+
 .trust-camera-card {
   margin-bottom: 0.6rem;
 }
@@ -2598,4 +2683,126 @@ button[aria-busy='true'] {
 
 .trust-camera-steps li + li {
   margin-top: 0.5rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Match history pagination
+   --------------------------------------------------------------------------- */
+
+.history-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+/* The section heading's own top margin is what separates this whole block
+   from whatever came before it — letting the page-size control sit in the
+   same flex row would double that gap on the control's side. */
+.history-header h2 {
+  margin-bottom: 0;
+}
+
+.history-page-size {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.history-page-size select {
+  min-height: 36px;
+  padding: 0.35rem 0.5rem;
+}
+
+.history-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Courts accordion — closed by default, one open at a time
+   --------------------------------------------------------------------------- */
+
+/* .court-list already sets the li's padding/border/background; a <details>
+   inside needs to fill that box edge-to-edge rather than sit inside its own
+   inset margin, since the summary is what's clickable now. */
+.court-accordion li {
+  padding: 0;
+  overflow: hidden;
+}
+
+.court-accordion details {
+  width: 100%;
+}
+
+.court-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  cursor: pointer;
+  list-style: none;
+  /* Same weight as the plain (non-accordion) list this replaces, so
+   * collapsing to "just a name and a status" doesn't also look less
+   * important. */
+  font-weight: 600;
+}
+
+/* Replaced by .court-chevron below — the native triangle (Safari renders it
+   even in a flex summary, via this pseudo-element; other browsers vary) is
+   hidden so there's exactly one, consistently-styled expand/collapse
+   indicator instead of a possible second one fighting it. */
+.court-summary::-webkit-details-marker {
+  display: none;
+}
+
+.court-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Rotates from "▸ pointing at the row" to "▾ pointing at what it opened" —
+ * the same shorthand every OS file browser uses, so a first-time admin
+ * reads this as an expandable row without needing a label. */
+.court-chevron {
+  display: inline-block;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  transition: transform 0.15s ease;
+}
+
+details[open] > .court-summary > .court-chevron {
+  transform: rotate(90deg);
+}
+
+.court-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0 0.75rem 0.75rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.1rem;
+  padding-top: 0.6rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Umpire list — capped height, own scrollbar past ~4 rows
+   --------------------------------------------------------------------------- */
+
+/* Approximate: one row is ~2.5rem (padding + a single text/badge line) plus
+   the list's 0.4rem gap between rows. Tuned for "about 4 rows before it
+   scrolls", not a pixel-exact measurement — adjust here if that guess is off
+   once it's on a real screen. */
+.umpire-list {
+  max-height: 11.5rem;
+  overflow-y: auto;
 }

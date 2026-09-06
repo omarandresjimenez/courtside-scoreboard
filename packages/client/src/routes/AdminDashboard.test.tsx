@@ -40,6 +40,34 @@ const sampleMatches: MatchSummary[] = [
   },
 ];
 
+/** N completed matches for pagination tests, newest first — matching how
+ * the server actually orders GET /api/matches, since the component trusts
+ * that order rather than re-sorting client-side. */
+function manyMatches(count: number): MatchSummary[] {
+  return Array.from({ length: count }, (_, i) => ({
+    matchId: `m-${count - i}`,
+    matchType: 'singles',
+    status: 'COMPLETED',
+    assignedCourtId: 'c1',
+    courtLabel: 'Court 1',
+    createdAt: new Date(2026, 0, count - i).toISOString(),
+    teams: { A: { name: null, country: null }, B: { name: null, country: null } },
+    players: [
+      { playerId: `a-${count - i}`, side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+      { playerId: `b-${count - i}`, side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
+    ],
+    derived: {
+      sets: [{ setNumber: 1, scoreA: 21, scoreB: 15, winner: 'A' }],
+      setsWon: { A: 1, B: 0 },
+      matchWinner: 'A',
+    },
+  }));
+}
+
+function historyList(): HTMLElement {
+  return document.querySelector('.history-list') as HTMLElement;
+}
+
 const sampleCourts: Court[] = [
   { courtId: 'c1', label: 'Court 1', currentMatchId: null, tvCode: 'TVC001' },
 ];
@@ -112,6 +140,7 @@ function mockFetchRoutes(routes: {
   getCourts?: Response;
   getUmpires?: Response;
   getTournamentPlayers?: Response;
+  getConfig?: Response;
   getMatch?: Response;
   postMatches?: Response;
   postCourts?: Response;
@@ -135,6 +164,10 @@ function mockFetchRoutes(routes: {
     // manual name-entry path unless it opts into a roster explicitly.
     if (pathname === '/api/tournament-players' && method === 'GET')
       return routes.getTournamentPlayers ?? jsonResponse([]);
+    if (pathname === '/api/config' && method === 'GET')
+      return (
+        routes.getConfig ?? jsonResponse({ mdnsHostname: 'courtside.local', mdnsEnabled: true })
+      );
     if (url === '/api/matches' && method === 'POST') {
       return routes.postMatches ?? jsonResponse(sampleCreatedMatch());
     }
@@ -145,7 +178,9 @@ function mockFetchRoutes(routes: {
       return routes.postUmpires ?? jsonResponse(sampleUmpires[0]);
     }
     if (url === '/api/tournament-players/import' && method === 'POST') {
-      return routes.postTournamentPlayersImport ?? jsonResponse({ imported: 0, updated: 0, skipped: 0 });
+      return (
+        routes.postTournamentPlayersImport ?? jsonResponse({ imported: 0, updated: 0, skipped: 0 })
+      );
     }
     if (url.startsWith('/api/courts/') && method === 'DELETE') {
       return routes.deleteCourt ?? jsonResponse({});
@@ -190,39 +225,64 @@ beforeEach(() => {
 
 describe('AdminDashboard', () => {
   describe('trust this phone for camera streaming', () => {
-    it('shows the card even when no tournament is selected', () => {
+    // Moved under Umpires, inside the tournament-scoped admin grid — it no
+    // longer renders standalone before a tournament is selected.
+    it('does not show without a tournament selected, now that it lives under Umpires', () => {
       localStorage.removeItem('courtside:tournamentId');
       window.history.replaceState({}, '', '/admin');
       render(<AdminDashboard />);
 
       expect(
-        screen.getByRole('heading', { name: 'Trust this phone for camera streaming' }),
-      ).toBeInTheDocument();
+        screen.queryByRole('heading', { name: 'Trust this phone for camera streaming' }),
+      ).not.toBeInTheDocument();
     });
 
-    it('renders a QR code for installing the CA certificate', () => {
+    it('is collapsed by default, showing only the heading', () => {
       render(<AdminDashboard />);
 
+      expect(
+        screen.getByRole('heading', { name: 'Trust this phone for camera streaming' }),
+      ).toBeVisible();
+      // The SVG's own <title> is never a visible element (browsers and jsdom
+      // both treat it like <head><title> — display:none by default), so the
+      // figcaption is what actually reflects the accordion's collapsed state.
+      expect(screen.getByText('Scan on the filming phone')).not.toBeVisible();
+    });
+
+    it('expands to reveal the QR code on click', async () => {
+      render(<AdminDashboard />);
+
+      await userEvent.click(
+        screen.getByRole('heading', { name: 'Trust this phone for camera streaming' }),
+      );
+
+      expect(screen.getByText('Scan on the filming phone')).toBeVisible();
       expect(
         screen.getByTitle("QR code to install this server's camera-streaming certificate"),
       ).toBeInTheDocument();
     });
 
-    it('keeps the install steps collapsed behind a disclosure until expanded', () => {
+    it('keeps the install steps collapsed behind a nested disclosure until expanded', async () => {
       render(<AdminDashboard />);
+      await userEvent.click(
+        screen.getByRole('heading', { name: 'Trust this phone for camera streaming' }),
+      );
 
       const details = screen.getByText('Show install steps').closest('details');
       expect(details).not.toHaveAttribute('open');
-      expect(screen.getByText(/Certificate Trust Settings/)).toBeInTheDocument();
+      expect(screen.getByText(/Certificate Trust Settings/)).not.toBeVisible();
     });
 
     it('expands to show iPhone and Android install steps', async () => {
       render(<AdminDashboard />);
+      await userEvent.click(
+        screen.getByRole('heading', { name: 'Trust this phone for camera streaming' }),
+      );
 
       await userEvent.click(screen.getByText('Show install steps'));
 
-      expect(screen.getByText(/iPhone:/)).toBeInTheDocument();
-      expect(screen.getByText(/Android:/)).toBeInTheDocument();
+      expect(screen.getByText(/iPhone:/)).toBeVisible();
+      expect(screen.getByText(/Android:/)).toBeVisible();
     });
   });
 
@@ -411,6 +471,27 @@ describe('AdminDashboard', () => {
     expect(screen.getAllByText('21')).toHaveLength(2);
     expect(screen.getAllByText('21')[0]).toHaveClass('set-score-winner');
     expect(screen.getAllByText('21')[1]).toHaveClass('set-score-winner');
+  });
+
+  it("shows the match's category in place of singles/doubles, not alongside it", async () => {
+    mockFetchRoutes({
+      getMatches: jsonResponse([{ ...sampleMatches[0]!, category: 'BS U19' }]),
+    });
+
+    render(<AdminDashboard />);
+
+    await waitFor(() => expect(historyList()).toHaveTextContent('BS U19'));
+    // Same replacement the TV/umpire/stream-viewer screens make — the
+    // history list used to show both the category tag and "singles" at once.
+    expect(historyList()).not.toHaveTextContent('singles');
+  });
+
+  it('falls back to singles/doubles in the history list when a match has no category', async () => {
+    mockFetchRoutes({ getMatches: jsonResponse(sampleMatches) });
+
+    render(<AdminDashboard />);
+
+    await waitFor(() => expect(historyList()).toHaveTextContent('singles'));
   });
 
   it('looks up a court label from the fetched courts list when the match summary has none', async () => {
@@ -619,6 +700,143 @@ describe('AdminDashboard', () => {
       expect(await screen.findByText('Link copied.')).toBeInTheDocument();
     });
 
+    it('lists a broadcast (camera) link and QR code per court, not per match', async () => {
+      // mDNS host preference is a separate concern with its own tests below
+      // — disabled here so this test deterministically exercises the plain
+      // browser-address fallback (jsdom's default origin is http://localhost
+      // with no port) rather than racing the async /api/config fetch.
+      mockFetchRoutes({
+        getCourts: jsonResponse(sampleCourts),
+        getConfig: jsonResponse({ mdnsHostname: 'courtside.local', mdnsEnabled: false }),
+      });
+
+      render(<AdminDashboard />);
+      await screen.findByText('Court 1', { selector: 'span' });
+
+      expect(screen.getByLabelText('Broadcast link (court phone)')).toHaveValue(
+        'https://localhost:443/stream/court/c1',
+      );
+      expect(screen.getByTitle('QR code for the broadcast link to Court 1')).toBeInTheDocument();
+    });
+
+    it('copies the broadcast link when Copy is clicked', async () => {
+      mockFetchRoutes({
+        getCourts: jsonResponse(sampleCourts),
+        getConfig: jsonResponse({ mdnsHostname: 'courtside.local', mdnsEnabled: false }),
+      });
+
+      render(<AdminDashboard />);
+      await screen.findByText('Court 1', { selector: 'span' });
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Copy broadcast link for Court 1' }),
+      );
+
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+        'https://localhost:443/stream/court/c1',
+      );
+      expect(await screen.findByText('Link copied.')).toBeInTheDocument();
+    });
+
+    it("prefers the advertised mDNS hostname over this browser's own address once /api/config resolves", async () => {
+      mockFetchRoutes({
+        getCourts: jsonResponse(sampleCourts),
+        getConfig: jsonResponse({ mdnsHostname: 'courtside.local', mdnsEnabled: true }),
+      });
+
+      render(<AdminDashboard />);
+      await screen.findByText('Court 1', { selector: 'span' });
+
+      await waitFor(() =>
+        expect(screen.getByLabelText('Broadcast link (court phone)')).toHaveValue(
+          'https://courtside.local:443/stream/court/c1',
+        ),
+      );
+    });
+
+    it("falls back to this browser's address when /api/config is unreachable", async () => {
+      mockFetchRoutes({
+        getCourts: jsonResponse(sampleCourts),
+        getConfig: nonJsonErrorResponse(),
+      });
+
+      render(<AdminDashboard />);
+      await screen.findByText('Court 1', { selector: 'span' });
+
+      expect(screen.getByLabelText('Broadcast link (court phone)')).toHaveValue(
+        'https://localhost:443/stream/court/c1',
+      );
+    });
+
+    describe('accordion behaviour', () => {
+      const twoCourts: Court[] = [
+        { courtId: 'c1', label: 'Court 1', currentMatchId: null, tvCode: 'TVC001' },
+        { courtId: 'c2', label: 'Court 2', currentMatchId: null, tvCode: 'TVC002' },
+      ];
+
+      it('keeps every court collapsed by default, showing only name and availability', async () => {
+        mockFetchRoutes({ getCourts: jsonResponse(twoCourts) });
+        render(<AdminDashboard />);
+        await screen.findByText('Court 1', { selector: 'span' });
+
+        // Name and status are always visible — they live in the summary,
+        // not the collapsible body.
+        expect(screen.getByText('Court 1', { selector: 'span' })).toBeVisible();
+        expect(screen.getByText('Court 2', { selector: 'span' })).toBeVisible();
+        // Everything else is inside a closed <details> — present in the DOM
+        // (jsdom doesn't strip it), but not visible until expanded.
+        for (const tvLink of screen.getAllByLabelText('TV link')) {
+          expect(tvLink).not.toBeVisible();
+        }
+      });
+
+      it("expands a court's panel on click, revealing its links", async () => {
+        mockFetchRoutes({ getCourts: jsonResponse(twoCourts) });
+        render(<AdminDashboard />);
+        await screen.findByText('Court 1', { selector: 'span' });
+
+        await userEvent.click(screen.getByText('Court 1', { selector: 'span' }));
+
+        expect(screen.getAllByLabelText('TV link')[0]).toBeVisible();
+      });
+
+      it('collapses the previously open court when a different one is opened — only one at a time', async () => {
+        mockFetchRoutes({ getCourts: jsonResponse(twoCourts) });
+        render(<AdminDashboard />);
+        await screen.findByText('Court 1', { selector: 'span' });
+
+        await userEvent.click(screen.getByText('Court 1', { selector: 'span' }));
+        expect(screen.getAllByLabelText('TV link')[0]).toBeVisible();
+
+        await userEvent.click(screen.getByText('Court 2', { selector: 'span' }));
+
+        const tvLinks = screen.getAllByLabelText('TV link');
+        expect(tvLinks[0]).not.toBeVisible(); // Court 1, now closed
+        expect(tvLinks[1]).toBeVisible(); // Court 2, now open
+      });
+
+      it('collapses a court again when its own summary is clicked a second time', async () => {
+        mockFetchRoutes({ getCourts: jsonResponse(twoCourts) });
+        render(<AdminDashboard />);
+        await screen.findByText('Court 1', { selector: 'span' });
+
+        const summary = screen.getByText('Court 1', { selector: 'span' });
+        await userEvent.click(summary);
+        expect(screen.getAllByLabelText('TV link')[0]).toBeVisible();
+
+        await userEvent.click(summary);
+        expect(screen.getAllByLabelText('TV link')[0]).not.toBeVisible();
+      });
+
+      it('marks every court row with a chevron indicating it expands', async () => {
+        mockFetchRoutes({ getCourts: jsonResponse(twoCourts) });
+        render(<AdminDashboard />);
+        await screen.findByText('Court 1', { selector: 'span' });
+
+        expect(document.querySelectorAll('.court-chevron')).toHaveLength(twoCourts.length);
+      });
+    });
+
     it('removes a court when Remove is clicked and refreshes the list', async () => {
       mockFetchRoutes({ getCourts: jsonResponse(sampleCourts) });
 
@@ -751,6 +969,18 @@ describe('AdminDashboard', () => {
 
       expect(await screen.findByText('Uma Umpire', { selector: 'span' })).toBeInTheDocument();
       expect(within(umpireList()).getByText('Available')).toBeInTheDocument();
+    });
+
+    it('caps the umpire list to a scrollable height instead of growing the page indefinitely', async () => {
+      mockFetchRoutes({ getUmpires: jsonResponse(sampleUmpires) });
+
+      render(<AdminDashboard />);
+      await screen.findByText('Uma Umpire', { selector: 'span' });
+
+      // jsdom doesn't compute real layout, so this can't assert on an actual
+      // scrollbar appearing — the CSS class carrying the max-height +
+      // overflow-y:auto (styles.css) is the thing to check.
+      expect(umpireList()).toHaveClass('umpire-list');
     });
 
     it('shows an umpire as Busy when assigned to a live match', async () => {
@@ -904,8 +1134,10 @@ describe('AdminDashboard', () => {
       render(<AdminDashboard />);
 
       // Three levels of heading, not one flat list of look-alike labels.
+      // Team/country no longer have their own "Sides" group — they live
+      // inside Players now, under the player(s) they belong to.
       expect(screen.getByRole('heading', { name: 'Create match' })).toBeInTheDocument();
-      ['Format', 'Assignment', 'Sides', 'Players'].forEach((group) =>
+      ['Format', 'Assignment', 'Players'].forEach((group) =>
         expect(screen.getByRole('group', { name: group })).toBeInTheDocument(),
       );
     });
@@ -1024,6 +1256,27 @@ describe('AdminDashboard', () => {
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
         'http://localhost/umpire/m-42?token=secret-tok',
       );
+    });
+
+    it('does not show a broadcast or viewer link in the created-match panel — that link now lives on the court', async () => {
+      render(<AdminDashboard />);
+      await selectCourt();
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
+      mockFetchRoutes({ postMatches: jsonResponse(sampleCreatedMatch({ matchId: 'm-42' })) });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      const umpireLinkInput = await screen.findByLabelText('Umpire link');
+      // Scoped to the panel itself: the Courts list above it now has its own
+      // "Broadcast link (court phone)" input with the same accessible name,
+      // and this test is about the panel no longer duplicating it, not
+      // about the label being unique page-wide.
+      const panel = within(umpireLinkInput.closest('.created-match-links')!);
+      expect(panel.queryByLabelText('Broadcast link (court phone)')).not.toBeInTheDocument();
+      expect(panel.queryByLabelText('Viewer link (internet)')).not.toBeInTheDocument();
+      expect(panel.queryByText(/Copy broadcast link/)).not.toBeInTheDocument();
+      expect(panel.queryByText(/Copy viewer link/)).not.toBeInTheDocument();
     });
 
     // qrcode.react emits two <path>s: a plain background plate, then the
@@ -1277,6 +1530,26 @@ describe('AdminDashboard', () => {
       expect(await screen.findByText('Scoring is locked.')).toBeInTheDocument();
     });
 
+    it('shows the error right under the Create match form, not at the top of the page, and never scrolls the admin there', async () => {
+      const scrollIntoView = jest.spyOn(HTMLElement.prototype, 'scrollIntoView');
+      render(<AdminDashboard />);
+      await selectCourt();
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
+      mockFetchRoutes({ postMatches: jsonResponse({ error: 'Scoring is locked.' }, false) });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      const message = await screen.findByText('Scoring is locked.');
+      // Lives in Create match's own form, beside the button that triggered
+      // it — not the page-wide banner near the H1.
+      expect(message.closest('form')).toBe(
+        screen.getByRole('button', { name: 'Create match' }).closest('form'),
+      );
+      expect(scrollIntoView).not.toHaveBeenCalled();
+      scrollIntoView.mockRestore();
+    });
+
     it('falls back to a generic message when a failed creation has no error field', async () => {
       render(<AdminDashboard />);
       await selectCourt();
@@ -1421,6 +1694,83 @@ describe('AdminDashboard', () => {
       ]);
     });
 
+    it('shows the eligibility error when a category is chosen after picking a now-mismatched player', async () => {
+      render(<AdminDashboard />);
+      await selectCourt();
+      await userEvent.type(await screen.findByLabelText('Side A player 1'), 'Joh');
+      await userEvent.click(await screen.findByRole('option', { name: /John Doe/ }));
+      await userEvent.type(screen.getByLabelText('Side B player 1'), 'Jan');
+      await userEvent.click(await screen.findByRole('option', { name: /Jane Smith/ }));
+      await userEvent.selectOptions(screen.getByLabelText('Category'), 'WS');
+      mockFetchRoutes({
+        getTournamentPlayers: jsonResponse(sampleRoster),
+        postMatches: jsonResponse(
+          { error: 'A player on side A is not registered for category "WS".' },
+          false,
+        ),
+      });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      expect(
+        await screen.findByText('A player on side A is not registered for category "WS".'),
+      ).toBeInTheDocument();
+    });
+
+    it("auto-fills a side's team and country from the selected player's roster record", async () => {
+      const roster: TournamentPlayer[] = [
+        { ...sampleRoster[0]!, club: 'River Club' },
+        sampleRoster[1]!,
+      ];
+      mockFetchRoutes({ getTournamentPlayers: jsonResponse(roster) });
+      render(<AdminDashboard />);
+
+      await userEvent.type(await screen.findByLabelText('Side A player 1'), 'Joh');
+      await userEvent.click(await screen.findByRole('option', { name: /John Doe/ }));
+
+      expect(screen.getAllByLabelText('Team')[0]).toHaveValue('River Club');
+      expect(screen.getAllByLabelText('Country')[0]).toHaveValue('USA');
+      // The other side is untouched.
+      expect(screen.getAllByLabelText('Team')[1]).toHaveValue('');
+      expect(screen.getAllByLabelText('Country')[1]).toHaveValue('');
+    });
+
+    it('lets the admin override an auto-filled team or country', async () => {
+      const roster: TournamentPlayer[] = [
+        { ...sampleRoster[0]!, club: 'River Club' },
+        sampleRoster[1]!,
+      ];
+      mockFetchRoutes({ getTournamentPlayers: jsonResponse(roster) });
+      render(<AdminDashboard />);
+      await userEvent.type(await screen.findByLabelText('Side A player 1'), 'Joh');
+      await userEvent.click(await screen.findByRole('option', { name: /John Doe/ }));
+
+      const teamInput = screen.getAllByLabelText('Team')[0]!;
+      await userEvent.clear(teamInput);
+      await userEvent.type(teamInput, 'Independent');
+
+      expect(teamInput).toHaveValue('Independent');
+    });
+
+    it('leaves a previously auto-filled team and country alone when the player search is cleared', async () => {
+      const roster: TournamentPlayer[] = [
+        { ...sampleRoster[0]!, club: 'River Club' },
+        sampleRoster[1]!,
+      ];
+      mockFetchRoutes({ getTournamentPlayers: jsonResponse(roster) });
+      render(<AdminDashboard />);
+      const playerField = await screen.findByLabelText('Side A player 1');
+      await userEvent.type(playerField, 'Joh');
+      await userEvent.click(await screen.findByRole('option', { name: /John Doe/ }));
+
+      // Typing again invalidates the selection (see PlayerAutocomplete) —
+      // mid-search is not "this side no longer has a team".
+      await userEvent.type(playerField, 'x');
+
+      expect(screen.getAllByLabelText('Team')[0]).toHaveValue('River Club');
+      expect(screen.getAllByLabelText('Country')[0]).toHaveValue('USA');
+    });
+
     it('blocks submission until every player slot has an actual selection, not just typed text', async () => {
       render(<AdminDashboard />);
       await selectCourt();
@@ -1445,8 +1795,22 @@ describe('AdminDashboard', () => {
 
     it('pre-filters the player search to those registered for the selected category', async () => {
       const roster: TournamentPlayer[] = [
-        { ...sampleRoster[0]!, tournamentPlayerId: 'tp-a', firstName: 'Chris', lastName: 'Adams', gender: 'M', categories: 'MS' },
-        { ...sampleRoster[0]!, tournamentPlayerId: 'tp-b', firstName: 'Chris', lastName: 'Baker', gender: 'F', categories: 'WS' },
+        {
+          ...sampleRoster[0]!,
+          tournamentPlayerId: 'tp-a',
+          firstName: 'Chris',
+          lastName: 'Adams',
+          gender: 'M',
+          categories: 'MS',
+        },
+        {
+          ...sampleRoster[0]!,
+          tournamentPlayerId: 'tp-b',
+          firstName: 'Chris',
+          lastName: 'Baker',
+          gender: 'F',
+          categories: 'WS',
+        },
       ];
       mockFetchRoutes({ getTournamentPlayers: jsonResponse(roster) });
       render(<AdminDashboard />);
@@ -1461,8 +1825,22 @@ describe('AdminDashboard', () => {
 
     it('does not filter the player search before a category has been chosen', async () => {
       const roster: TournamentPlayer[] = [
-        { ...sampleRoster[0]!, tournamentPlayerId: 'tp-a', firstName: 'Chris', lastName: 'Adams', gender: 'M', categories: 'MS' },
-        { ...sampleRoster[0]!, tournamentPlayerId: 'tp-b', firstName: 'Chris', lastName: 'Baker', gender: 'F', categories: 'WS' },
+        {
+          ...sampleRoster[0]!,
+          tournamentPlayerId: 'tp-a',
+          firstName: 'Chris',
+          lastName: 'Adams',
+          gender: 'M',
+          categories: 'MS',
+        },
+        {
+          ...sampleRoster[0]!,
+          tournamentPlayerId: 'tp-b',
+          firstName: 'Chris',
+          lastName: 'Baker',
+          gender: 'F',
+          categories: 'WS',
+        },
       ];
       mockFetchRoutes({ getTournamentPlayers: jsonResponse(roster) });
       render(<AdminDashboard />);
@@ -1475,8 +1853,22 @@ describe('AdminDashboard', () => {
 
     it('re-filters the player search when the category is changed', async () => {
       const roster: TournamentPlayer[] = [
-        { ...sampleRoster[0]!, tournamentPlayerId: 'tp-a', firstName: 'Chris', lastName: 'Adams', gender: 'M', categories: 'MS' },
-        { ...sampleRoster[0]!, tournamentPlayerId: 'tp-b', firstName: 'Chris', lastName: 'Baker', gender: 'F', categories: 'WS' },
+        {
+          ...sampleRoster[0]!,
+          tournamentPlayerId: 'tp-a',
+          firstName: 'Chris',
+          lastName: 'Adams',
+          gender: 'M',
+          categories: 'MS',
+        },
+        {
+          ...sampleRoster[0]!,
+          tournamentPlayerId: 'tp-b',
+          firstName: 'Chris',
+          lastName: 'Baker',
+          gender: 'F',
+          categories: 'WS',
+        },
       ];
       mockFetchRoutes({ getTournamentPlayers: jsonResponse(roster) });
       render(<AdminDashboard />);
@@ -1493,6 +1885,89 @@ describe('AdminDashboard', () => {
       await userEvent.click(screen.getByLabelText('Side A player 1'));
       expect(screen.getByRole('option', { name: /Chris Baker/ })).toBeInTheDocument();
       expect(screen.queryByRole('option', { name: /Chris Adams/ })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('match history pagination', () => {
+    it('shows no page-size control or pagination when there are no matches', async () => {
+      mockFetchRoutes({ getMatches: jsonResponse([]) });
+      render(<AdminDashboard />);
+
+      await screen.findByText('No matches yet.');
+      expect(screen.queryByLabelText('Rows per page')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Page \d+ of \d+/)).not.toBeInTheDocument();
+    });
+
+    it('defaults to 10 rows per page and hides pagination when everything fits on one page', async () => {
+      mockFetchRoutes({ getMatches: jsonResponse(manyMatches(9)) });
+      render(<AdminDashboard />);
+
+      await waitFor(() => expect(historyList().querySelectorAll('li')).toHaveLength(9));
+      expect(screen.getByLabelText('Rows per page')).toHaveValue('10');
+      expect(screen.queryByText(/Page \d+ of \d+/)).not.toBeInTheDocument();
+    });
+
+    it('shows only the first 10 matches by default when there are more than that', async () => {
+      mockFetchRoutes({ getMatches: jsonResponse(manyMatches(25)) });
+      render(<AdminDashboard />);
+
+      await waitFor(() => expect(historyList().querySelectorAll('li')).toHaveLength(10));
+      // manyMatches(25) is newest-first: match "m-25" (day 25) is the very
+      // newest and belongs on page 1; "m-15" (day 15) is the first entry of
+      // page 2 and should not show up yet.
+      expect(historyList()).toHaveTextContent('1/25/2026');
+      expect(historyList()).not.toHaveTextContent('1/15/2026');
+      expect(screen.getByText('Page 1 of 3')).toBeInTheDocument();
+    });
+
+    it('moves to the next and previous page', async () => {
+      mockFetchRoutes({ getMatches: jsonResponse(manyMatches(25)) });
+      render(<AdminDashboard />);
+      await waitFor(() => expect(historyList().querySelectorAll('li')).toHaveLength(10));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Next →' }));
+
+      expect(screen.getByText('Page 2 of 3')).toBeInTheDocument();
+      expect(historyList().querySelectorAll('li')).toHaveLength(10);
+
+      await userEvent.click(screen.getByRole('button', { name: '← Previous' }));
+
+      expect(screen.getByText('Page 1 of 3')).toBeInTheDocument();
+    });
+
+    it('disables Previous on the first page and Next on the last page', async () => {
+      mockFetchRoutes({ getMatches: jsonResponse(manyMatches(15)) });
+      render(<AdminDashboard />);
+      await waitFor(() => expect(historyList().querySelectorAll('li')).toHaveLength(10));
+
+      expect(screen.getByRole('button', { name: '← Previous' })).toBeDisabled();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Next →' }));
+
+      expect(screen.getByRole('button', { name: 'Next →' })).toBeDisabled();
+    });
+
+    it('changes how many rows are shown per page, and resets to page 1', async () => {
+      mockFetchRoutes({ getMatches: jsonResponse(manyMatches(25)) });
+      render(<AdminDashboard />);
+      await waitFor(() => expect(historyList().querySelectorAll('li')).toHaveLength(10));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Next →' }));
+      await userEvent.selectOptions(screen.getByLabelText('Rows per page'), '20');
+
+      expect(historyList().querySelectorAll('li')).toHaveLength(20);
+      expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+    });
+
+    it('shows every match on one page once rows-per-page reaches 50', async () => {
+      mockFetchRoutes({ getMatches: jsonResponse(manyMatches(25)) });
+      render(<AdminDashboard />);
+      await waitFor(() => expect(historyList().querySelectorAll('li')).toHaveLength(10));
+
+      await userEvent.selectOptions(screen.getByLabelText('Rows per page'), '50');
+
+      expect(historyList().querySelectorAll('li')).toHaveLength(25);
+      expect(screen.queryByText(/Page \d+ of \d+/)).not.toBeInTheDocument();
     });
   });
 });

@@ -26,6 +26,7 @@ function broadcast(overrides: Partial<CameraBroadcast> = {}): CameraBroadcast {
   return {
     status: 'idle',
     errorMessage: null,
+    autoStopNotice: null,
     internetViewers: 0,
     stream: null,
     ...actions,
@@ -116,6 +117,33 @@ describe('StreamBroadcast', () => {
 
     expect(screen.getByText('Camera permission was denied.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Start transmission/ })).toBeInTheDocument();
+  });
+
+  it('explains an automatic stop, distinctly from an error, once the match ends', () => {
+    mockUseCameraBroadcast.mockReturnValue(
+      broadcast({
+        status: 'idle',
+        autoStopNotice: 'Transmission stopped automatically — the match on this court has ended.',
+      }),
+    );
+    renderAt();
+
+    expect(screen.getByText(/Transmission stopped automatically/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Start transmission/ })).toBeInTheDocument();
+  });
+
+  it('prefers a real error over a stale auto-stop notice', () => {
+    mockUseCameraBroadcast.mockReturnValue(
+      broadcast({
+        status: 'error',
+        errorMessage: 'Camera permission was denied.',
+        autoStopNotice: 'Transmission stopped automatically — the match on this court has ended.',
+      }),
+    );
+    renderAt();
+
+    expect(screen.getByText('Camera permission was denied.')).toBeInTheDocument();
+    expect(screen.queryByText(/Transmission stopped automatically/)).not.toBeInTheDocument();
   });
 
   it('pluralises the internet viewer count', () => {

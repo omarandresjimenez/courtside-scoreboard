@@ -10,6 +10,20 @@ function roomForStream(courtId: string): string {
   return `stream:${courtId}`;
 }
 
+/** Called from the scoring socket (sockets/index.ts) the moment a match is
+ * finalised, so the court's broadcaster (and any viewer) can react without
+ * this module needing to know anything about matches itself. */
+export function notifyStreamMatchFinalized(io: Server, courtId: string): void {
+  io.to(roomForStream(courtId)).emit(STREAM_EVENTS.MATCH_FINALIZED);
+}
+
+/** Called from the scoring socket the moment a match starts, so a court
+ * phone sitting in standby (see the 'stream-standby' role below) can start
+ * transmitting itself. */
+export function notifyStreamMatchStarted(io: Server, courtId: string): void {
+  io.to(roomForStream(courtId)).emit(STREAM_EVENTS.MATCH_STARTED);
+}
+
 /** courtId -> the current broadcaster's socket id. Mesh WebRTC: the
  * broadcaster holds one RTCPeerConnection per viewer, this server only
  * relays signaling messages between them — see StreamBroadcast/StreamViewer
@@ -27,10 +41,18 @@ export function registerStreamSocketHandlers(io: Server): void {
   io.on('connection', (socket: Socket) => {
     const { role, courtId } = socket.handshake.query as Record<string, string | undefined>;
     if (!courtId) return;
-    if (role !== 'stream-broadcaster' && role !== 'stream-viewer') return;
+    if (role !== 'stream-broadcaster' && role !== 'stream-viewer' && role !== 'stream-standby') {
+      return;
+    }
 
     const room = roomForStream(courtId);
     void socket.join(room);
+
+    // A standby phone (idle, waiting for its match to start) only needs to
+    // sit in the room to receive MATCH_STARTED/MATCH_FINALIZED — it isn't a
+    // broadcaster or a WebRTC viewer, so none of the peer bookkeeping below
+    // applies to it.
+    if (role === 'stream-standby') return;
 
     if (role === 'stream-broadcaster') {
       broadcasterByCourtId.set(courtId, socket.id);

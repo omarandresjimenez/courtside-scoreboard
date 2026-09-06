@@ -14,6 +14,7 @@ import { Prisma } from '../../generated/prisma/index.js';
 import { prisma } from '../db/client.js';
 import { loadMatchState } from '../match/replay.js';
 import { syncScoreToCloud, toPublicScoreboard } from '../integrations/cloud-sync.js';
+import { notifyStreamMatchFinalized, notifyStreamMatchStarted } from './stream.js';
 
 function roomForMatch(matchId: string): string {
   return `match:${matchId}`;
@@ -236,11 +237,23 @@ async function withAuthorizedMatch(
       where: { id: matchId },
       data: { status: 'COMPLETED', completedAt: new Date() },
     });
+    // The court camera has nothing left worth sending once its match is
+    // over — let the broadcaster stop itself instead of running until
+    // someone remembers to walk over and press Stop.
+    if (state.match.assignedCourtId) {
+      notifyStreamMatchFinalized(io, state.match.assignedCourtId);
+    }
   } else if (state.derived.serve.servingSide && state.match.status === 'CREATED') {
     await prisma.match.update({
       where: { id: matchId },
       data: { status: 'IN_PROGRESS', startedAt: new Date() },
     });
+    // Lets a court phone that's already holding camera permission (from an
+    // earlier transmission) start itself the instant play begins, instead
+    // of waiting for someone to notice and press Start.
+    if (state.match.assignedCourtId) {
+      notifyStreamMatchStarted(io, state.match.assignedCourtId);
+    }
   } else if (!state.derived.finalised && state.match.status === 'COMPLETED') {
     await prisma.match.update({
       where: { id: matchId },

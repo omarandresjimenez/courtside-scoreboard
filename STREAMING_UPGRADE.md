@@ -855,6 +855,16 @@ re-open the page and press Start. Observed for real during this work. Every
 viewer correctly shows "Waiting for the court to start streaming…", which is
 accurate but easy to misread as a bug. This is still true and unchanged.
 
+**Partly closed, for a different case:** a later pass added
+`STREAM_EVENTS.MATCH_STARTED`/`MATCH_FINALIZED` (see HANDOFF.md's "admin
+dashboard reorganization" session) so the phone starts and stops itself with
+the match, no press needed — but only once camera permission has already
+been granted on that phone (a browser won't prompt for a new one without a
+user gesture), and only while its browser tab is still open, sitting idle on
+the court's broadcast page, listening as a `stream-standby` socket. None of
+that survives a server restart or the tab being closed — the gap above is
+specifically about those, and remains exactly as described.
+
 **What's no longer true: the viewer used to need a manual reload too.**
 A later pass added automatic reconnection to `public-viewer/index.html`
 (`connectAttempt`/`scheduleRetry`, with backoff and a visible "↻ Reconnect"

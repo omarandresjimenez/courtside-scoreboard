@@ -10,8 +10,13 @@ jest.mock('./camera-stream.js', () => ({
 }));
 
 const lanHandle = { setVideoEnabled: jest.fn(), stop: jest.fn() };
-const mockStartBroadcasting = jest.fn(() => lanHandle);
-jest.mock('./webrtc-stream.js', () => ({ startBroadcasting: () => mockStartBroadcasting() }));
+const mockStartBroadcasting = jest.fn((..._args: unknown[]) => lanHandle);
+const standbyHandle = { stop: jest.fn() };
+const mockWatchForMatchStart = jest.fn((..._args: unknown[]) => standbyHandle);
+jest.mock('./webrtc-stream.js', () => ({
+  startBroadcasting: (...args: unknown[]) => mockStartBroadcasting(...args),
+  watchForMatchStart: (...args: unknown[]) => mockWatchForMatchStart(...args),
+}));
 
 const internetHandle = { stop: jest.fn(), viewerCount: () => 0, setPaused: jest.fn() };
 const RELAY_SERVERS = [{ urls: 'turn:turn.cloudflare.com:3478', username: 'u', credential: 'c' }];
@@ -181,5 +186,87 @@ describe('useCameraBroadcast', () => {
     act(() => onCount(3));
 
     await waitFor(() => expect(result.current.internetViewers).toBe(3));
+  });
+
+  it('stops itself and leaves a notice when the server reports the match finalised', async () => {
+    const { result } = await started();
+    const onMatchFinalized = mockStartBroadcasting.mock.calls[0]![2] as () => void;
+
+    act(() => onMatchFinalized());
+
+    expect(lanHandle.stop).toHaveBeenCalled();
+    expect(internetHandle.stop).toHaveBeenCalled();
+    expect(track.stop).toHaveBeenCalled();
+    expect(result.current.status).toBe('idle');
+    expect(result.current.stream).toBeNull();
+    expect(result.current.autoStopNotice).toMatch(/match on this court has ended/);
+  });
+
+  it('clears a stale finalised notice on the next start', async () => {
+    const { result } = await started();
+    const onMatchFinalized = mockStartBroadcasting.mock.calls[0]![2] as () => void;
+    act(() => onMatchFinalized());
+    expect(result.current.autoStopNotice).not.toBeNull();
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    expect(result.current.autoStopNotice).toBeNull();
+  });
+
+  describe('auto-start on match start', () => {
+    it('listens for the umpire starting the match while idle', () => {
+      renderHook(() => useCameraBroadcast('court1'));
+      expect(mockWatchForMatchStart).toHaveBeenCalledWith('court1', expect.any(Function));
+    });
+
+    it('does not listen without a court id', () => {
+      renderHook(() => useCameraBroadcast(undefined));
+      expect(mockWatchForMatchStart).not.toHaveBeenCalled();
+    });
+
+    it('starts itself silently when the umpire starts the match and the phone already has camera permission', async () => {
+      const { result } = renderHook(() => useCameraBroadcast('court1'));
+      const onMatchStarted = mockWatchForMatchStart.mock.calls[0]![1] as () => Promise<void>;
+
+      await act(async () => {
+        await onMatchStarted();
+      });
+
+      expect(result.current.status).toBe('live');
+      expect(result.current.errorMessage).toBeNull();
+      // Stops standing by the moment it becomes the real broadcaster —
+      // otherwise the same signal could fire the whole thing twice.
+      expect(standbyHandle.stop).toHaveBeenCalled();
+    });
+
+    it('falls back to idle with no visible error when the phone never granted camera permission', async () => {
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+      mockRequestCameraStream.mockRejectedValueOnce(new Error('Permission denied'));
+      const { result } = renderHook(() => useCameraBroadcast('court1'));
+      const onMatchStarted = mockWatchForMatchStart.mock.calls[0]![1] as () => Promise<void>;
+
+      await act(async () => {
+        await onMatchStarted();
+      });
+
+      expect(result.current.status).toBe('idle');
+      expect(result.current.errorMessage).toBeNull();
+      expect(warn).toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      warn.mockRestore();
+      error.mockRestore();
+    });
+
+    it('stops listening once a real broadcast is live, and listens again after it stops', async () => {
+      const { result } = await started();
+      expect(standbyHandle.stop).toHaveBeenCalledTimes(1);
+
+      act(() => result.current.stop());
+
+      expect(mockWatchForMatchStart).toHaveBeenCalledTimes(2);
+    });
   });
 });

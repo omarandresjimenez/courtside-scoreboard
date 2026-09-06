@@ -12,7 +12,11 @@ the app behaves exactly as described above. Camera capture needs a secure
 connection, so the first phone to open the broadcast link sees a one-time
 security-certificate prompt; installing it (a QR code and short instructions
 are right on the admin dashboard) means that phone never sees it again, even
-across restarts — see STREAMING_UPGRADE.md section 7.6. See
+across restarts — see STREAMING_UPGRADE.md section 7.6. The broadcast link is
+one stable address per court (found on that court's row in the admin
+dashboard, not regenerated per match), and once a phone has granted camera
+permission once, it starts and stops transmitting on its own as each match on
+that court starts and finishes — see STREAMING_UPGRADE.md section 9.4. See
 [STREAMING_UPGRADE.md](STREAMING_UPGRADE.md) for how that works and what it
 needs; [HANDOFF.md](HANDOFF.md) is the "how it actually works and why" doc for
 everything else.
@@ -162,7 +166,7 @@ npm run typecheck    # tsc --noEmit across every package
 npm test             # Jest --coverage in every package
 ```
 
-717 tests across the three packages (382 client / 193 server / 142
+788 tests across the three packages (426 client / 220 server / 142
 shared). Each package enforces its own coverage floor in its
 `jest.config.cjs` (`coverageThreshold`), ratcheted to what its suite
 actually achieves rather than a round number:
@@ -199,7 +203,8 @@ on staged files.
 Working end-to-end: creating courts, umpires, and matches from the admin
 dashboard (a match requires picking both a court and an umpire, each
 blocked from double-booking while they're on a live match), optional team
-name/country per side, the umpire and TV links surfaced right after
+name/country per side (auto-filled from a picked roster player's own
+club/country, still editable), the umpire and TV links surfaced right after
 creation (the umpire link only once — the server never re-serves that
 token), the full scoring engine (undo, configurable formats, doubles serve
 rotation and court-position setup, mid-game and between-games intervals

@@ -1,5 +1,9 @@
 import { STREAM_EVENTS } from '@courtside/shared';
-import { registerStreamSocketHandlers } from './stream.js';
+import {
+  notifyStreamMatchFinalized,
+  notifyStreamMatchStarted,
+  registerStreamSocketHandlers,
+} from './stream.js';
 
 type Handler = (payload?: unknown) => void;
 
@@ -65,6 +69,12 @@ function connectViewer(io: ReturnType<typeof makeIo>, id = 'v1') {
   return socket;
 }
 
+function connectStandby(io: ReturnType<typeof makeIo>, id = 's1') {
+  const socket = makeSocket(id, { role: 'stream-standby', courtId: COURT });
+  io.connect(socket);
+  return socket;
+}
+
 let io: ReturnType<typeof makeIo>;
 
 beforeEach(() => {
@@ -93,6 +103,18 @@ describe('registerStreamSocketHandlers', () => {
   it('puts both roles in the court room', () => {
     expect(connectBroadcaster(io).join).toHaveBeenCalledWith(ROOM);
     expect(connectViewer(io).join).toHaveBeenCalledWith(ROOM);
+  });
+
+  it('lets a standby phone join the room too, without becoming a broadcaster or a viewer', () => {
+    const standby = connectStandby(io);
+
+    expect(standby.join).toHaveBeenCalledWith(ROOM);
+    // No WebRTC bookkeeping for it: it never becomes "the broadcaster" and
+    // never triggers a VIEWER_JOINED offer negotiation.
+    connectBroadcaster(io, 'b1');
+    io.targetEmit.mockClear();
+    connectViewer(io, 'v1');
+    expect(io.targetEmit).not.toHaveBeenCalledWith(STREAM_EVENTS.VIEWER_JOINED, { peerId: 's1' });
   });
 
   it('tells the broadcaster about a viewer that arrives later', () => {
@@ -216,5 +238,25 @@ describe('registerStreamSocketHandlers', () => {
 
     expect(() => viewer.fire('disconnect')).not.toThrow();
     expect(io.targetEmit).not.toHaveBeenCalled();
+  });
+});
+
+describe('notifyStreamMatchFinalized', () => {
+  it('tells everyone in that court room, not any other court', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    notifyStreamMatchFinalized(io as any, COURT);
+
+    expect(io.to).toHaveBeenCalledWith(ROOM);
+    expect(io.targetEmit).toHaveBeenCalledWith(STREAM_EVENTS.MATCH_FINALIZED);
+  });
+});
+
+describe('notifyStreamMatchStarted', () => {
+  it('tells everyone in that court room, not any other court', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    notifyStreamMatchStarted(io as any, COURT);
+
+    expect(io.to).toHaveBeenCalledWith(ROOM);
+    expect(io.targetEmit).toHaveBeenCalledWith(STREAM_EVENTS.MATCH_STARTED);
   });
 });

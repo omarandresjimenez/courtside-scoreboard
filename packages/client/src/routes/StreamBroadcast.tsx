@@ -23,8 +23,16 @@ const STATUS_LABELS: Record<string, string> = {
  * live in useCameraBroadcast. */
 export function StreamBroadcast() {
   const { courtId } = useParams<{ courtId: string }>();
-  const { status, errorMessage, internetViewers, stream, start, togglePause, stop } =
-    useCameraBroadcast(courtId);
+  const {
+    status,
+    errorMessage,
+    autoStopNotice,
+    internetViewers,
+    stream,
+    start,
+    togglePause,
+    stop,
+  } = useCameraBroadcast(courtId);
   // Falls back to the id until the name arrives (or if it never does) — the
   // person holding the phone needs to know which court this is.
   const courtLabel = useCourtLabel(courtId);
@@ -62,6 +70,7 @@ export function StreamBroadcast() {
       </div>
 
       {errorMessage && <p className="field-error">{errorMessage}</p>}
+      {!errorMessage && autoStopNotice && <p className="field-notice">{autoStopNotice}</p>}
 
       <div className="broadcast-controls">
         {!isLiveOrPaused ? (

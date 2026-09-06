@@ -18,16 +18,51 @@ export interface BroadcasterHandle {
   stop: () => void;
 }
 
+export interface StandbyHandle {
+  stop: () => void;
+}
+
+/** A lightweight, non-transmitting connection for a court's broadcast page
+ * while it's idle: joins the court's stream room just to hear the umpire
+ * start the match, so a phone that already holds camera permission (from an
+ * earlier transmission) can begin without anyone touching it. Distinct from
+ * startBroadcasting — this never opens the camera or a peer connection, it
+ * only listens. */
+export function watchForMatchStart(
+  courtId: string,
+  onMatchStarted: () => void | Promise<void>,
+): StandbyHandle {
+  const socket: Socket = io('/', {
+    query: { role: 'stream-standby', courtId },
+    transports: ['websocket'],
+  });
+  socket.on(STREAM_EVENTS.MATCH_STARTED, () => onMatchStarted());
+  return {
+    stop() {
+      socket.disconnect();
+    },
+  };
+}
+
 /** Real-time video via WebRTC instead of the old ~2 FPS JPEG-over-HTTP
  * relay: one RTCPeerConnection per viewer (a mesh — fine for the handful of
  * viewers a single court draws), signaled over Socket.io. The browser's own
  * encoder streams actual motion video at native frame rate. */
-export function startBroadcasting(courtId: string, stream: MediaStream): BroadcasterHandle {
+export function startBroadcasting(
+  courtId: string,
+  stream: MediaStream,
+  onMatchFinalized?: () => void,
+): BroadcasterHandle {
   const socket: Socket = io('/', {
     query: { role: 'stream-broadcaster', courtId },
     transports: ['websocket'],
   });
   const peers = new Map<string, RTCPeerConnection>();
+
+  // The server sends this the moment the umpire finalises the match on this
+  // court — nothing left worth transmitting, so let the caller stop itself
+  // rather than running until someone walks over and presses Stop.
+  socket.on(STREAM_EVENTS.MATCH_FINALIZED, () => onMatchFinalized?.());
 
   function createPeerFor(viewerId: string): RTCPeerConnection {
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });

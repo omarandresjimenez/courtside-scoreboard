@@ -13,6 +13,7 @@ import { tournamentPlayersRouter } from './routes/tournament-players.js';
 import { umpiresRouter } from './routes/umpires.js';
 import { turnRouter } from './routes/turn.js';
 import { localCaRouter } from './routes/local-ca.js';
+import { configRouter } from './routes/config.js';
 import { registerSocketHandlers } from './sockets/index.js';
 import { registerStreamSocketHandlers } from './sockets/stream.js';
 import { initializeCloudServices } from './integrations/cloud-sync.js';
@@ -56,6 +57,7 @@ export function createApp(options: CreateAppOptions = {}): CourtsideApp {
   app.use('/api', umpiresRouter);
   app.use('/api', turnRouter);
   app.use('/api', localCaRouter);
+  app.use('/api', configRouter);
 
   const clientDistPath = options.clientDistPath ?? config.clientDistPath;
   if (existsSync(clientDistPath)) {
