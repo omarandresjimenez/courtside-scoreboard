@@ -271,6 +271,141 @@
         max-width: 70ch;
       }
 
+      /* ---------- Internet video walkthrough ---------- */
+
+      .walkthrough {
+        margin-top: 1.5rem;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+
+      .walkthrough summary {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        list-style: none;
+        cursor: pointer;
+        padding: 1.1rem 1.5rem;
+        font-weight: 700;
+        font-size: 0.95rem;
+      }
+
+      .walkthrough summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .walkthrough summary .chevron {
+        display: inline-block;
+        color: var(--cloud);
+        transition: transform 0.15s ease;
+      }
+
+      .walkthrough[open] summary .chevron {
+        transform: rotate(90deg);
+      }
+
+      .walkthrough summary .subtitle {
+        font-weight: 400;
+        color: var(--text-dim);
+        font-size: 0.8rem;
+      }
+
+      .walkthrough-body {
+        padding: 0 1.5rem 1.75rem;
+        border-top: 1px solid var(--border);
+      }
+
+      .walkthrough-intro {
+        color: var(--text-dim);
+        max-width: 70ch;
+        margin: 1.25rem 0 1.4rem;
+      }
+
+      .walkthrough-steps {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        counter-reset: step;
+        display: flex;
+        flex-direction: column;
+        gap: 1.1rem;
+      }
+
+      .walkthrough-steps li {
+        counter-increment: step;
+        position: relative;
+        padding-left: 2.6rem;
+        max-width: 74ch;
+      }
+
+      .walkthrough-steps li::before {
+        content: counter(step);
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 1.9rem;
+        height: 1.9rem;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--cloud);
+        font-weight: 700;
+        font-size: 0.85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .walkthrough-steps li strong {
+        display: block;
+        margin-bottom: 0.15rem;
+      }
+
+      .walkthrough-steps li p {
+        margin: 0;
+        color: var(--text-dim);
+        font-size: 0.92rem;
+      }
+
+      .walkthrough code {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-radius: 0.3rem;
+        padding: 0.05rem 0.35rem;
+        font-size: 0.85em;
+      }
+
+      .walkthrough-limits {
+        margin-top: 1.75rem;
+        padding: 1rem 1.25rem;
+        background: var(--panel-2);
+        border-radius: var(--radius-sm);
+        border-left: 3px solid var(--cloud);
+      }
+
+      .walkthrough-limits h3 {
+        margin: 0 0 0.6rem;
+        font-size: 0.85rem;
+      }
+
+      .walkthrough-limits ul {
+        margin: 0;
+        padding-left: 1.1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .walkthrough-limits li {
+        font-size: 0.88rem;
+        color: var(--text-dim);
+      }
+
+      .walkthrough-limits strong {
+        color: var(--text);
+      }
+
       /* ---------- Detail panel ---------- */
 
       .backdrop {
@@ -551,6 +686,156 @@
           </div>
         </div>
       </div>
+
+      <details class="walkthrough">
+        <summary>
+          <span class="chevron">▸</span>
+          How a video stream actually reaches someone across the world
+          <span class="subtitle"
+            >— the
+            <strong>Court-side Phone → Firestore → Cloudflare TURN → Public Viewer</strong> path,
+            step by step</span
+          >
+        </summary>
+        <div class="walkthrough-body">
+          <p class="walkthrough-intro">
+            The internet path exists because a viewer on another continent obviously can't reach a
+            laptop on someone's home Wi-Fi. But the fix isn't "route the video through a cloud
+            server" — it's <strong>WebRTC</strong>: the court-side phone and each viewer's browser
+            open a direct peer-to-peer connection and stream video straight between them. Firestore
+            is only ever used to help the two sides <em>find</em> each other; once connected, it
+            never sees a single video byte.
+          </p>
+
+          <ol class="walkthrough-steps">
+            <li>
+              <strong>The court phone captures video.</strong>
+              <p>
+                <code>getUserMedia()</code> grabs the phone's camera as a <code>MediaStream</code>.
+                This needs a secure (HTTPS) context — the whole reason the server runs a second,
+                TLS-only listener alongside its normal HTTP one.
+              </p>
+            </li>
+            <li>
+              <strong>The broadcaster announces itself.</strong>
+              <p>
+                It writes <code>streams/{courtId} = { live: true }</code> to Firestore — a tiny
+                presence flag, not video — so any open viewer page flips from "waiting for the court
+                to start streaming…" to "connecting" the instant the phone goes live.
+              </p>
+            </li>
+            <li>
+              <strong>A viewer opens the public link.</strong>
+              <p>
+                Anyone with the public URL loads a plain static page (no build step, no framework,
+                hosted on Firebase Hosting) and creates its own document:
+                <code>streams/{courtId}/viewers/{viewerId}</code>, stamped with a timestamp.
+              </p>
+            </li>
+            <li>
+              <strong>The broadcaster starts a private negotiation with that one viewer.</strong>
+              <p>
+                The phone watches the <code>viewers</code> subcollection live. The moment a new
+                viewer document appears, it creates a brand-new <code>RTCPeerConnection</code> just
+                for that viewer (a mesh, not a broadcast server — one connection per viewer, all
+                from the same phone), attaches its camera track, and writes a WebRTC
+                <strong>offer</strong> (an SDP blob describing its codec, resolution, etc.) into
+                that viewer's document.
+              </p>
+            </li>
+            <li>
+              <strong>The viewer answers.</strong>
+              <p>
+                Its page is watching its own document for an <code>offer</code> field. When one
+                shows up, it creates its own peer connection, sets the offer as the remote
+                description, generates an <strong>answer</strong>, and writes that back to the same
+                document.
+              </p>
+            </li>
+            <li>
+              <strong>Both sides exchange ICE candidates.</strong>
+              <p>
+                Each side gathers a list of possible network addresses for itself and writes each
+                one as its own document, in <code>offerCandidates</code> /
+                <code>answerCandidates</code> subcollections. Both sides are listening to the
+                other's collection, so these arrive incrementally as real network paths to try.
+              </p>
+            </li>
+            <li>
+              <strong>Direct connection is attempted — and usually needs help.</strong>
+              <p>
+                Two random devices on the internet are almost always behind NAT, and a phone on
+                cellular data is often behind carrier-grade NAT, which is stricter still. STUN
+                (<code>stun.l.google.com</code>) only tells each side its own public address — it
+                can't force a connection through a NAT that refuses unsolicited traffic. When that
+                fails, the connection needs a <strong>TURN relay</strong>: a server both sides can
+                reach that just forwards packets between them.
+              </p>
+            </li>
+            <li>
+              <strong>TURN credentials are minted server-side — for the broadcaster only.</strong>
+              <p>
+                The phone (not the viewer) asks the LAN server for one via
+                <code>GET /api/turn-credentials</code>. The server calls Cloudflare's Realtime TURN
+                API with a long-lived secret key that never leaves the server, and gets back a
+                short-lived username/password pair (24h TTL) to hand to the browser. This is
+                deliberately asymmetric: in ICE, only <em>one</em> side needs to offer a relay
+                candidate for the connection to succeed, so the public viewer page needs no
+                credentials — and no secrets — at all.
+              </p>
+            </li>
+            <li>
+              <strong>Media flows — encrypted, peer-to-peer (or peer-via-relay-to-peer).</strong>
+              <p>
+                Once ICE picks a working path, it's WebRTC doing what it does: encrypted (SRTP)
+                audio/video streaming directly from the phone's encoder to the viewer's
+                <code>&lt;video&gt;</code> element. If a direct path worked, it's true P2P; if TURN
+                was needed, it's phone → Cloudflare relay → viewer — but still never through this
+                app's own server.
+              </p>
+            </li>
+            <li>
+              <strong>The score rides along on the same page, completely separately.</strong>
+              <p>
+                Every point the umpire scores is mirrored (fire-and-forget, after the LAN broadcast)
+                to a <code>matches/{courtId}</code> Firestore document through an explicit
+                allow-list function — deliberately not a raw copy of the match, since the real
+                record carries the umpire's scoring credential. The public viewer has its own
+                separate live listener on that document, so the scoreboard updates regardless of
+                whether the video connection is even up.
+              </p>
+            </li>
+          </ol>
+
+          <div class="walkthrough-limits">
+            <h3>The limits, on purpose</h3>
+            <ul>
+              <li>
+                <strong>~5 viewers, hard cap.</strong> It's a mesh, so the phone runs a separate
+                video encode per viewer. A 6th request is just refused — past that point, quality
+                degrades for everyone, including people on the LAN.
+              </li>
+              <li>
+                <strong>Abandoned viewers get cleaned up.</strong> A crashed or killed tab never
+                fires a proper "goodbye," so stale viewer documents older than 60 seconds are purged
+                before being treated as real — otherwise a few dead tabs would permanently occupy
+                all 5 slots.
+              </li>
+              <li>
+                <strong>Auto-reconnect, no manual reload.</strong> If the connection drops, the
+                viewer page retries with backoff on its own.
+              </li>
+              <li>
+                <strong>Graceful degradation everywhere.</strong> No Firebase credentials → no
+                internet path at all, but the LAN screens work exactly as before. No TURN configured
+                → still works for anyone whose network allows a direct path; only the "someone's on
+                hostile mobile-carrier NAT" case fails, with an on-page diagnostic explaining
+                exactly that instead of a generic error.
+              </li>
+            </ul>
+          </div>
+        </div>
+      </details>
 
       <div class="shared-section">
         <div class="section-heading">Shared building blocks</div>
