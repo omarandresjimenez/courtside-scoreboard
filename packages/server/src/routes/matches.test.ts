@@ -457,3 +457,174 @@ describe('GET /api/matches', () => {
     expect(raw).not.toContain('umpireToken');
   });
 });
+
+describe('POST /api/matches — roster-backed players', () => {
+  it('copies name/lastName from the roster rather than trusting the client', async () => {
+    const rosterPlayer = mockPrisma.seedTournamentPlayer({
+      tournamentId: 'tournament-required',
+      firstName: 'Jane',
+      lastName: 'Roe',
+      gender: 'F',
+      categories: 'WS',
+    });
+
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({
+        ...validSinglesBody,
+        category: 'WS',
+        players: [
+          { side: 'A', tournamentPlayerId: rosterPlayer.id, name: 'Someone Else' },
+          { side: 'B', tournamentPlayerId: mockPrisma.seedTournamentPlayer({
+              tournamentId: 'tournament-required',
+              firstName: 'Amy',
+              lastName: 'Ng',
+              gender: 'F',
+              categories: 'WS',
+            }).id,
+          },
+        ],
+      });
+
+    expect(response.status).toBe(201);
+    const players = response.body.match.players as Array<{ name: string; lastName: string }>;
+    expect(players.map((p) => `${p.name} ${p.lastName}`).sort()).toEqual(['Amy Ng', 'Jane Roe']);
+  });
+
+  it('rejects a tournamentPlayerId not found in this tournament\'s roster', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({
+        ...validSinglesBody,
+        players: [
+          { side: 'A', tournamentPlayerId: 'ghost-roster-row' },
+          { side: 'B', name: 'Manual Player' },
+        ],
+      });
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects a manual player with no name once a roster is imported', async () => {
+    mockPrisma.seedTournamentPlayer({ tournamentId: 'tournament-required' });
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({
+        ...validSinglesBody,
+        players: [
+          { side: 'A', name: '' },
+          { side: 'B', name: 'Manual Player' },
+        ],
+      });
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects a category not among the tournament\'s imported categories', async () => {
+    mockPrisma.seedTournamentPlayer({ tournamentId: 'tournament-required', categories: 'MS/MD' });
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({ ...validSinglesBody, category: 'XD' });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('not one of');
+  });
+
+  it('accepts a category that is among the tournament\'s imported categories', async () => {
+    mockPrisma.seedTournamentPlayer({ tournamentId: 'tournament-required', categories: 'MS/MD' });
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({ ...validSinglesBody, category: 'MS' });
+    expect(response.status).toBe(201);
+  });
+
+  it('rejects a female player in a men\'s singles category', async () => {
+    const male = mockPrisma.seedTournamentPlayer({
+      tournamentId: 'tournament-required',
+      firstName: 'John',
+      lastName: 'Doe',
+      gender: 'M',
+      categories: 'MS',
+    });
+    const female = mockPrisma.seedTournamentPlayer({
+      tournamentId: 'tournament-required',
+      firstName: 'Jane',
+      lastName: 'Roe',
+      gender: 'F',
+      categories: 'MS',
+    });
+
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({
+        ...validSinglesBody,
+        category: 'MS',
+        players: [
+          { side: 'A', tournamentPlayerId: male.id },
+          { side: 'B', tournamentPlayerId: female.id },
+        ],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('does not accept a female');
+  });
+
+  it('rejects a player too old for a U13 category', async () => {
+    const young = mockPrisma.seedTournamentPlayer({
+      tournamentId: 'tournament-required',
+      firstName: 'Kid',
+      lastName: 'One',
+      birthDate: new Date('2015-01-01'),
+      categories: 'U13',
+    });
+    const old = mockPrisma.seedTournamentPlayer({
+      tournamentId: 'tournament-required',
+      firstName: 'Adult',
+      lastName: 'Two',
+      birthDate: new Date('1990-01-01'),
+      categories: 'U13',
+    });
+
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({
+        ...validSinglesBody,
+        category: 'U13',
+        players: [
+          { side: 'A', tournamentPlayerId: young.id },
+          { side: 'B', tournamentPlayerId: old.id },
+        ],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('too old');
+  });
+
+  it('allows manual (non-roster) players when no roster has been imported at all', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send(validSinglesBody);
+    expect(response.status).toBe(201);
+  });
+
+  it('rejects a court/umpire pair whose tournament no longer exists', async () => {
+    mockPrisma.seedCourt({ id: 'court-ghost-tournament', tournamentId: 'ghost-tournament' });
+    mockPrisma.seedUmpire({ id: 'umpire-ghost-tournament', tournamentId: 'ghost-tournament' });
+
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({
+        ...validSinglesBody,
+        courtId: 'court-ghost-tournament',
+        umpireId: 'umpire-ghost-tournament',
+        tournamentId: 'ghost-tournament',
+      });
+    expect(response.status).toBe(400);
+  });
+});

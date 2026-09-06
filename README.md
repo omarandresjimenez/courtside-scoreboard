@@ -158,23 +158,30 @@ npm run typecheck    # tsc --noEmit across every package
 npm test             # Jest --coverage in every package
 ```
 
-Each package enforces its own coverage floor in its `jest.config.cjs`
-(`coverageThreshold`), ratcheted to what its suite actually achieves rather
-than a round number:
+717 tests across the three packages (382 client / 193 server / 142
+shared). Each package enforces its own coverage floor in its
+`jest.config.cjs` (`coverageThreshold`), ratcheted to what its suite
+actually achieves rather than a round number:
 
-- `shared` — 100% on every metric. The pure scoring engine (`scoring.ts`,
-  `events.ts`, `types.ts`) has no untestable branches.
-- `server` — 100% on every metric. Routes and Socket.io handlers are tested
-  with `supertest` and a real `socket.io-client` against an ephemeral port;
-  Prisma is swapped for an in-memory fake (`src/testUtils/fakePrisma.ts`)
-  since `prisma generate` needs network access some environments block.
-  `src/db/client.ts` and `src/index.ts` are excluded as bootstrap/wiring,
-  not logic.
+- `shared` — 100% on statements/functions/lines, 98% on branches. The pure
+  scoring, validation and CSV-parsing engines (`scoring.ts`, `events.ts`,
+  `types.ts`, `players.ts`, `csv.ts`) have no untestable branches; the one
+  open gap is a documented, pre-existing branch in `names.ts`.
+- `server` — 100% on functions/lines, 99% on statements, 98% on branches.
+  Routes and Socket.io handlers are tested with `supertest` and a real
+  `socket.io-client` against an ephemeral port; Prisma is swapped for an
+  in-memory fake (`src/testUtils/fakePrisma.ts`) since `prisma generate`
+  needs network access some environments block — except
+  `db/ensure-columns.test.ts`, which needs the _real_ SQLite upgrade
+  behaviour (raw `ALTER TABLE`/`CREATE TABLE`) and runs against a
+  throwaway on-disk database instead. `src/db/client.ts` and `src/index.ts`
+  are excluded as bootstrap/wiring, not logic.
 - `client` — 100% on statements/functions/lines, 98% on branches. React
-  Testing Library covers every route screen and hook; the one open branch
-  is a documented, currently-unreachable fallback in `AdminDashboard.tsx`
-  for the not-yet-built "custom" scoring preset. `src/main.tsx` is excluded
-  as bootstrap.
+  Testing Library covers every route screen, hook, and the roster-picking
+  `PlayerAutocomplete` component; the open branches are a documented,
+  currently-unreachable fallback in `AdminDashboard.tsx` for the
+  not-yet-built "custom" scoring preset, plus a couple of pre-existing
+  `onFocus`/link-copy handlers. `src/main.tsx` is excluded as bootstrap.
 
 None of the above is gamed to hit a number: gaps are either genuinely
 unreachable (and commented as such at the call site) or a real test was
@@ -199,6 +206,19 @@ diagram modeled on official umpire apps — see
 `docs/umpire-screen-spec.md` for the reference behaviour it follows. The
 TV screen scales to the actual display and is built without CSS Grid
 `subgrid`, which most smart TV browsers don't support (see HANDOFF.md).
+
+A tournament's player list can be imported from a CSV export (MemberID,
+FirstName, LastName, Gender, Country, Club, BirthDate, Category, Status)
+instead of typing names per match — see the "Import players" card on the
+admin dashboard. Once imported, creating a match picks players from a
+searchable dropdown (pre-filtered to whoever is registered for the
+category selected above it) instead of free-typed names, and category
+becomes a closed list of the codes the roster actually carries. A
+validation service (`packages/shared/src/players.ts`) checks a proposed
+line-up's gender, discipline (singles/doubles), and any age cap (e.g.
+"U13") against the category being assigned, using whatever roster data is
+actually present. A tournament with no imported roster falls back to the
+original manual name-entry form untouched.
 
 Stubbed for the next pass: reassigning an _existing_ match to a court after
 the fact, and the admin `EDIT_MATCH_DETAILS` / `EDIT_SCORING_CONFIG` /

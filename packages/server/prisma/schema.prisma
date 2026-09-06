@@ -42,6 +42,39 @@ model Tournament {
   courts    Court[]
   matches   Match[]
   umpires   Umpire[]
+  players   TournamentPlayer[]
+}
+
+/// A tournament's imported player roster — parsed from a CSV export
+/// (MemberID, FirstName, LastName, Gender, Country, Club, BirthDate,
+/// Category, Status) so admins pick a match's players from an autocomplete
+/// instead of retyping names, and so match creation can validate a player
+/// against their registered category, gender and age. See
+/// packages/shared/src/players.ts for the parsing/validation logic, and
+/// Player.tournamentPlayerId below for the link from a match's players.
+model TournamentPlayer {
+  id           String     @id @default(cuid())
+  tournamentId String
+  tournament   Tournament @relation(fields: [tournamentId], references: [id])
+  /// The source system's id for this player, when the export has one.
+  /// Nullable so a duplicate-import re-run can upsert by it; two rows with
+  /// no memberId at all are just two separate manual entries.
+  memberId     String?
+  firstName    String
+  lastName     String
+  /// "M" | "F", or null — not every export includes it.
+  gender       String?
+  country      String?
+  club         String?
+  birthDate    DateTime?
+  /// Raw slash-separated codes as imported, e.g. "MS/MD/XD".
+  categories   String     @default("")
+  /// Defaults to "Accepted" when the export doesn't specify one.
+  status       String     @default("Accepted")
+  createdAt    DateTime   @default(now())
+
+  @@unique([tournamentId, memberId])
+  @@index([tournamentId])
 }
 
 model Umpire {
@@ -111,6 +144,11 @@ model Player {
   /// database without touching the rows already in it.
   lastName  String @default("")
   shortName String
+  /// The roster row this player was selected from, if any — see
+  /// TournamentPlayer. Not a formal relation: a roster entry may be edited
+  /// or removed later without touching history already recorded here, so
+  /// this is traceability, not a source of truth for display.
+  tournamentPlayerId String?
 
   @@index([matchId])
 }

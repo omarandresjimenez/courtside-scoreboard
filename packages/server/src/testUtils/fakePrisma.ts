@@ -15,6 +15,22 @@ interface FakePlayerRow {
   name: string;
   lastName: string;
   shortName: string;
+  tournamentPlayerId?: string | null;
+}
+
+interface FakeTournamentPlayerRow {
+  id: string;
+  tournamentId: string;
+  memberId: string | null;
+  firstName: string;
+  lastName: string;
+  gender: string | null;
+  country: string | null;
+  club: string | null;
+  birthDate: Date | null;
+  categories: string;
+  status: string;
+  createdAt: Date;
 }
 
 interface FakeEventRow {
@@ -87,6 +103,7 @@ export function createFakePrisma() {
   const courts = new Map<string, FakeCourtRow>();
   const tournaments = new Map<string, FakeTournamentRow>();
   const umpires = new Map<string, FakeUmpireRow>();
+  const tournamentPlayers = new Map<string, FakeTournamentPlayerRow>();
 
   function seedTournament(overrides: Partial<FakeTournamentRow> = {}): FakeTournamentRow {
     const id = overrides.id ?? generateId('tournament');
@@ -184,6 +201,29 @@ export function createFakePrisma() {
       ...overrides,
     };
     umpires.set(id, row);
+    return row;
+  }
+
+  function seedTournamentPlayer(
+    overrides: Partial<FakeTournamentPlayerRow> = {},
+  ): FakeTournamentPlayerRow {
+    const id = overrides.id ?? generateId('roster-player');
+    const row: FakeTournamentPlayerRow = {
+      id,
+      tournamentId: overrides.tournamentId ?? 'tournament-required',
+      memberId: null,
+      firstName: 'Jane',
+      lastName: 'Roe',
+      gender: null,
+      country: null,
+      club: null,
+      birthDate: null,
+      categories: '',
+      status: 'Accepted',
+      createdAt: new Date(),
+      ...overrides,
+    };
+    tournamentPlayers.set(id, row);
     return row;
   }
 
@@ -402,6 +442,71 @@ export function createFakePrisma() {
       ),
     },
 
+    tournamentPlayer: {
+      create: jest.fn(
+        async ({
+          data,
+        }: {
+          data: Omit<FakeTournamentPlayerRow, 'id' | 'createdAt'>;
+        }) => seedTournamentPlayer(data),
+      ),
+
+      findMany: jest.fn(async ({ where }: { where?: { tournamentId?: string } } = {}) => {
+        return [...tournamentPlayers.values()]
+          .filter((p) => !where?.tournamentId || p.tournamentId === where.tournamentId)
+          .sort((a, b) => a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
+      }),
+
+      findUnique: jest.fn(
+        async ({
+          where,
+        }: {
+          where: { id?: string; tournamentId_memberId?: { tournamentId: string; memberId: string } };
+        }) => {
+          if (where.id) return tournamentPlayers.get(where.id) ?? null;
+          if (where.tournamentId_memberId) {
+            const { tournamentId, memberId } = where.tournamentId_memberId;
+            return (
+              [...tournamentPlayers.values()].find(
+                (p) => p.tournamentId === tournamentId && p.memberId === memberId,
+              ) ?? null
+            );
+          }
+          return null;
+        },
+      ),
+
+      upsert: jest.fn(
+        async ({
+          where,
+          create,
+          update,
+        }: {
+          where: { tournamentId_memberId: { tournamentId: string; memberId: string } };
+          create: Omit<FakeTournamentPlayerRow, 'id' | 'createdAt'>;
+          update: Partial<FakeTournamentPlayerRow>;
+        }) => {
+          const { tournamentId, memberId } = where.tournamentId_memberId;
+          const existing = [...tournamentPlayers.values()].find(
+            (p) => p.tournamentId === tournamentId && p.memberId === memberId,
+          );
+          if (existing) {
+            const updated = { ...existing, ...update };
+            tournamentPlayers.set(existing.id, updated);
+            return updated;
+          }
+          return seedTournamentPlayer(create);
+        },
+      ),
+
+      delete: jest.fn(async ({ where }: { where: { id: string } }) => {
+        const existing = tournamentPlayers.get(where.id);
+        if (!existing) throw new Error(`Fake tournament player ${where.id} not found`);
+        tournamentPlayers.delete(where.id);
+        return existing;
+      }),
+    },
+
     scoreEvent: {
       create: jest.fn(
         async ({
@@ -458,6 +563,7 @@ export function createFakePrisma() {
     courts.clear();
     tournaments.clear();
     umpires.clear();
+    tournamentPlayers.clear();
   }
 
   return {
@@ -468,6 +574,7 @@ export function createFakePrisma() {
     seedCourt,
     seedTournament,
     seedUmpire,
+    seedTournamentPlayer,
     reset,
   };
 }

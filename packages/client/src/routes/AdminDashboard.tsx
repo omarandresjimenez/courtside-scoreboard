@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import {
   SCORING_PRESETS,
+  parseCategoryList,
+  parseTournamentPlayersCsv,
   type Court,
   type Match,
   type MatchStatePayload,
@@ -9,10 +11,34 @@ import {
   type MatchType,
   type Side,
   type ScoringPresetName,
+  type TournamentPlayer,
   type Umpire,
 } from '@courtside/shared';
 import { QRCodeSVG } from 'qrcode.react';
 import { copyToClipboard } from '../lib/clipboard.js';
+import { PlayerAutocomplete, type PlayerSelection } from '../lib/PlayerAutocomplete.js';
+
+/** The four player slots a match form ever has — singles uses only a1/b1. */
+type PlayerSlot = 'a1' | 'a2' | 'b1' | 'b2';
+
+const EMPTY_ROSTER_SELECTIONS: Record<PlayerSlot, PlayerSelection | null> = {
+  a1: null,
+  a2: null,
+  b1: null,
+  b2: null,
+};
+
+/** `File.text()` reads the same bytes but isn't implemented everywhere this
+ * app's test environment runs — FileReader is the one CSV-reading path with
+ * universal support (jsdom included). */
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
 
 interface CreatedMatchLinks {
   matchId: string;
@@ -96,6 +122,26 @@ function absoluteUrl(pathAndQuery: string): string {
   return `${window.location.origin}${pathAndQuery}`;
 }
 
+/**
+ * Reads `{ error }` from a failed response, falling back to `fallback` when
+ * the body isn't JSON at all — e.g. a stale server build (no matching route
+ * yet) returning its default HTML 404 page, or a proxy/gateway error page.
+ * Every "show the server's error message" call site went through a bare
+ * `(await res.json()).error` before this, so any such response threw inside
+ * an `async` handler with no `catch`, which silently swallowed it: the admin
+ * saw no status message at all rather than a wrong one. Caught in the wild —
+ * a not-yet-restarted server made the roster import look like it did
+ * nothing, with no error to explain why.
+ */
+async function readErrorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await res.json()) as { error?: string };
+    return body.error ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function umpireLinkFor(match: Pick<Match, 'matchId' | 'umpireToken'>): string {
   return absoluteUrl(`/umpire/${match.matchId}?token=${match.umpireToken}`);
 }
@@ -168,17 +214,26 @@ export function AdminDashboard() {
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [courts, setCourts] = useState<Court[]>([]);
   const [umpires, setUmpires] = useState<Umpire[]>([]);
+  const [tournamentPlayers, setTournamentPlayers] = useState<TournamentPlayer[]>([]);
+  const [isImportingRoster, setIsImportingRoster] = useState(false);
   const [matchType, setMatchType] = useState<MatchType>('singles');
   const [preset, setPreset] = useState<ScoringPresetName>('standard');
   // First and family name are captured separately: scoreboards render
   // "J. Pérez", which cannot be derived reliably from one free-text field
-  // (compound family names, and given names that are two words).
+  // (compound family names, and given names that are two words). Used only
+  // when no roster has been imported for this tournament — see
+  // `rosterSelections` below for the picked-from-import path.
   const [names, setNames] = useState({
     a1: { first: '', last: '' },
     a2: { first: '', last: '' },
     b1: { first: '', last: '' },
     b2: { first: '', last: '' },
   });
+  // Per-slot roster pick, once a tournament has an imported player list —
+  // see PlayerAutocomplete. A slot's player is looked up server-side by id
+  // at creation time rather than trusting whatever name text is on screen.
+  const [rosterSelections, setRosterSelections] =
+    useState<Record<PlayerSlot, PlayerSelection | null>>(EMPTY_ROSTER_SELECTIONS);
   const [category, setCategory] = useState('');
   /** Guards a double submit and drives the button's busy state. */
   const [isCreating, setIsCreating] = useState(false);
@@ -223,7 +278,7 @@ export function AdminDashboard() {
     });
 
     if (!res.ok) {
-      setStatus((await res.json()).error ?? 'Failed to remove court.');
+      setStatus(await readErrorMessage(res, 'Failed to remove court.'));
       return;
     }
     setStatus('Court removed.');
@@ -237,7 +292,7 @@ export function AdminDashboard() {
     });
 
     if (!res.ok) {
-      setStatus((await res.json()).error ?? 'Failed to remove umpire.');
+      setStatus(await readErrorMessage(res, 'Failed to remove umpire.'));
       return;
     }
     setStatus('Umpire removed.');
@@ -280,14 +335,64 @@ export function AdminDashboard() {
     if (res.ok) setUmpires(await res.json());
   }
 
+  async function refreshTournamentPlayers() {
+    if (!adminPassword || !tournamentId) return;
+    const res = await fetch(
+      `/api/tournament-players?tournamentId=${encodeURIComponent(tournamentId)}`,
+      { headers: { 'x-admin-password': adminPassword } },
+    );
+    if (res.ok) setTournamentPlayers(await res.json());
+  }
+
   useEffect(() => {
     void refreshMatches();
     void refreshCourts();
     void refreshUmpires();
+    void refreshTournamentPlayers();
     const refreshInterval = window.setInterval(() => void refreshMatches(), 5_000);
     return () => window.clearInterval(refreshInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-fetch whenever the password changes
   }, [adminPassword]);
+
+  async function importRosterCsv(file: File) {
+    setStatus(null);
+    setIsImportingRoster(true);
+    try {
+      const text = await readFileAsText(file);
+      const { rows, skipped: unreadableRows } = parseTournamentPlayersCsv(text);
+      if (rows.length === 0) {
+        setStatus('No usable rows found in that file — every row needs at least a first and last name.');
+        return;
+      }
+
+      const res = await fetch('/api/tournament-players/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-password': adminPassword },
+        body: JSON.stringify({ tournamentId, players: rows }),
+      });
+      if (!res.ok) {
+        setStatus(await readErrorMessage(res, 'Failed to import players.'));
+        return;
+      }
+
+      const summary = (await res.json()) as { imported: number; updated: number; skipped: number };
+      const totalSkipped = summary.skipped + unreadableRows;
+      setStatus(
+        `Imported ${summary.imported} player${summary.imported === 1 ? '' : 's'}, updated ${summary.updated}` +
+          (totalSkipped ? `, skipped ${totalSkipped} row${totalSkipped === 1 ? '' : 's'}` : '') +
+          '.',
+      );
+      void refreshTournamentPlayers();
+    } catch {
+      // A thrown exception here (the fetch itself rejecting — offline, or a
+      // server that isn't listening at all — or FileReader failing) would
+      // otherwise propagate out of this `void`-called async function as an
+      // unhandled rejection: no status message, no visible failure at all.
+      setStatus('Failed to import players — check the connection and try again.');
+    } finally {
+      setIsImportingRoster(false);
+    }
+  }
 
   async function createCourt(e: React.FormEvent) {
     e.preventDefault();
@@ -300,7 +405,7 @@ export function AdminDashboard() {
     });
 
     if (!res.ok) {
-      setStatus((await res.json()).error ?? 'Failed to create court.');
+      setStatus(await readErrorMessage(res, 'Failed to create court.'));
       return;
     }
     setNewCourtLabel('');
@@ -318,7 +423,7 @@ export function AdminDashboard() {
     });
 
     if (!res.ok) {
-      setStatus((await res.json()).error ?? 'Failed to add umpire.');
+      setStatus(await readErrorMessage(res, 'Failed to add umpire.'));
       return;
     }
     setNewUmpireName('');
@@ -343,6 +448,22 @@ export function AdminDashboard() {
       .filter((id): id is string => Boolean(id)),
   );
 
+  // Once a roster has been imported, players are picked by name instead of
+  // typed — see PlayerAutocomplete — and category becomes a closed choice
+  // instead of free text, since only these codes have any registered player.
+  const hasRoster = tournamentPlayers.length > 0;
+  const availableCategories = Array.from(
+    new Set(tournamentPlayers.flatMap((p) => parseCategoryList(p.categories))),
+  ).sort();
+  // Narrows the player search to people actually registered for the chosen
+  // category — picking from an unfiltered roster of a hundred players for a
+  // "WS U15" match is exactly the busywork the search was meant to remove.
+  // Unfiltered until a category is chosen, so the search still works while
+  // filling the form top-to-bottom hasn't reached Category yet.
+  const rosterForCategory = category
+    ? tournamentPlayers.filter((p) => parseCategoryList(p.categories).includes(category))
+    : tournamentPlayers;
+
   async function createMatch(e: React.FormEvent) {
     e.preventDefault();
     if (isCreating) return;
@@ -359,16 +480,29 @@ export function AdminDashboard() {
   }
 
   async function submitMatch() {
-    const slot = (side: 'A' | 'B', key: keyof typeof names) => ({
-      side,
-      name: names[key].first.trim(),
-      lastName: names[key].last.trim(),
-    });
+    const slots: PlayerSlot[] = matchType === 'singles' ? ['a1', 'b1'] : ['a1', 'a2', 'b1', 'b2'];
+    const sideOf = (key: PlayerSlot): Side => (key.startsWith('a') ? 'A' : 'B');
 
-    const players =
-      matchType === 'singles'
-        ? [slot('A', 'a1'), slot('B', 'b1')]
-        : [slot('A', 'a1'), slot('A', 'a2'), slot('B', 'b1'), slot('B', 'b2')];
+    let players: Array<{ side: Side; tournamentPlayerId?: string; name?: string; lastName?: string }>;
+
+    if (hasRoster) {
+      const missingSlot = slots.find((key) => !rosterSelections[key]);
+      if (missingSlot) {
+        setStatus('Pick every player from the list before creating the match.');
+        return;
+      }
+      players = slots.map((key) => ({
+        side: sideOf(key),
+        // Safe: the check above already rejected any slot left unpicked.
+        tournamentPlayerId: rosterSelections[key]!.tournamentPlayerId,
+      }));
+    } else {
+      players = slots.map((key) => ({
+        side: sideOf(key),
+        name: names[key].first.trim(),
+        lastName: names[key].last.trim(),
+      }));
+    }
 
     const res = await fetch('/api/matches', {
       method: 'POST',
@@ -391,7 +525,7 @@ export function AdminDashboard() {
     });
 
     if (!res.ok) {
-      setStatus((await res.json()).error ?? 'Failed to create match.');
+      setStatus(await readErrorMessage(res, 'Failed to create match.'));
       return;
     }
     const created = (await res.json()) as { match: Match };
@@ -418,6 +552,7 @@ export function AdminDashboard() {
       b1: { first: '', last: '' },
       b2: { first: '', last: '' },
     });
+    setRosterSelections(EMPTY_ROSTER_SELECTIONS);
     setTeams({ A: { name: '', country: '' }, B: { name: '', country: '' } });
     // Category deliberately survives: a session usually enters a run of
     // matches in the same category, and retyping "BS U19" every time is a
@@ -445,6 +580,42 @@ export function AdminDashboard() {
         <p role="status" className="admin-status">
           {status}
         </p>
+      )}
+
+      {tournamentId && (
+        <section className="admin-card roster-import-card">
+          <h2>Import players</h2>
+          <p className="section-hint">
+            Upload this tournament&rsquo;s player list once (a CSV export from your tournament
+            software) to pick players by name below instead of retyping them, and to restrict
+            category to the ones players are actually registered for.
+          </p>
+          <div className="field-row">
+            <label className="file-input-label">
+              Player list CSV
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                aria-label="Player list CSV file"
+                disabled={isImportingRoster}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  // Cleared immediately so choosing the same filename again
+                  // (a corrected re-export) still fires this handler — the
+                  // browser otherwise treats an unchanged value as a no-op.
+                  e.target.value = '';
+                  if (file) void importRosterCsv(file);
+                }}
+              />
+            </label>
+          </div>
+          {tournamentPlayers.length > 0 && (
+            <p className="field-hint">
+              {tournamentPlayers.length} player{tournamentPlayers.length === 1 ? '' : 's'} imported
+              for this tournament.
+            </p>
+          )}
+        </section>
       )}
 
       {tournamentId && (
@@ -485,7 +656,18 @@ export function AdminDashboard() {
                     <li key={c.courtId}>
                       <div className="court-row-info">
                         <span>{c.label}</span>
-                        <span className="status-tag">{c.currentMatchId ? 'Live' : 'Idle'}</span>
+                        {/* Derived from the polled match list, not
+                            Court.currentMatchId: that field only ever gets
+                            set (at match creation) and never cleared, so a
+                            court that has ever hosted a match would show
+                            "busy" forever, even long after that match
+                            finished. occupiedCourtIds — already the source
+                            of truth for disabling this same court in the
+                            "Create match" dropdown below — reflects whether
+                            a CREATED/IN_PROGRESS match is on it right now. */}
+                        <span className="status-tag">
+                          {occupiedCourtIds.has(c.courtId) ? 'Busy' : 'Available'}
+                        </span>
                         <span>
                           Code on <a href="/tv">/tv</a>:{' '}
                           <strong className="join-code">{c.tvCode}</strong>
@@ -636,34 +818,55 @@ export function AdminDashboard() {
 
                 <label>
                   Category
-                  <input
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value)}
-                    placeholder="e.g. MS U19…"
-                    list="category-suggestions"
-                    autoComplete="off"
-                    spellCheck={false}
-                    /* Described by, not labelled by: hint text inside the
-                       <label> becomes part of the control's accessible name,
-                       so a screen reader would announce the whole sentence
-                       every time the field is focused. */
-                    aria-describedby="category-hint"
-                  />
+                  {availableCategories.length > 0 ? (
+                    <select
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value)}
+                      required
+                      aria-describedby="category-hint"
+                    >
+                      <option value="">Choose category</option>
+                      {availableCategories.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value)}
+                      placeholder="e.g. MS U19…"
+                      list="category-suggestions"
+                      autoComplete="off"
+                      spellCheck={false}
+                      /* Described by, not labelled by: hint text inside the
+                         <label> becomes part of the control's accessible name,
+                         so a screen reader would announce the whole sentence
+                         every time the field is focused. */
+                      aria-describedby="category-hint"
+                    />
+                  )}
                 </label>
                 <p className="field-hint" id="category-hint">
-                  Free text. Shown on the TV, umpire and viewer screens in place of
-                  “singles”/“doubles”, which it already implies.
+                  {availableCategories.length > 0
+                    ? 'From the imported player list — only categories a player is actually registered for.'
+                    : 'Free text. Shown on the TV, umpire and viewer screens in place of ' +
+                      '“singles”/“doubles”, which it already implies.'}
                 </p>
                 {/* Suggestions, not a closed list: category codes vary by
                     federation and age group, so anything fixed would be wrong
-                    somewhere. */}
-                <datalist id="category-suggestions">
-                  {['MS U19', 'WS U19', 'MD U19', 'WD U19', 'XD U19', 'MS U15', 'WS U15'].map(
-                    (c) => (
-                      <option key={c} value={c} />
-                    ),
-                  )}
-                </datalist>
+                    somewhere. Only offered once nothing has been imported —
+                    once it has, the <select> above replaces this entirely. */}
+                {availableCategories.length === 0 && (
+                  <datalist id="category-suggestions">
+                    {['MS U19', 'WS U19', 'MD U19', 'WD U19', 'XD U19', 'MS U15', 'WS U15'].map(
+                      (c) => (
+                        <option key={c} value={c} />
+                      ),
+                    )}
+                  </datalist>
+                )}
               </fieldset>
 
               <fieldset>
@@ -758,50 +961,72 @@ export function AdminDashboard() {
                     ] as const
                   )
                     .filter(([key]) => matchType === 'doubles' || !key.endsWith('2'))
-                    .map(([key, legend]) => (
-                      <fieldset key={key} className="player-fieldset">
-                        <legend>{legend}</legend>
-                        {/* Wrapper, not the fieldset itself: a flex/grid
-                            fieldset turns its legend into a layout item and
-                            pulls it out of the border gap. */}
-                        <div className="field-row">
-                          <label>
-                            First name
-                            <input
-                              aria-label={`${legend} first name`}
-                              value={names[key].first}
-                              onChange={(e) =>
-                                setNames((current) => ({
-                                  ...current,
-                                  [key]: { ...current[key], first: e.target.value },
-                                }))
-                              }
-                              /* Not the operator's own name, so browser autofill
-                               would offer the wrong person entirely. */
-                              autoComplete="off"
-                              spellCheck={false}
-                              required
-                            />
-                          </label>
-                          <label>
-                            Last name
-                            <input
-                              aria-label={`${legend} last name`}
-                              value={names[key].last}
-                              onChange={(e) =>
-                                setNames((current) => ({
-                                  ...current,
-                                  [key]: { ...current[key], last: e.target.value },
-                                }))
-                              }
-                              autoComplete="off"
-                              spellCheck={false}
-                              required
-                            />
-                          </label>
-                        </div>
-                      </fieldset>
-                    ))}
+                    .map(([key, legend]) =>
+                      hasRoster ? (
+                        // Once a roster has been imported, players are found
+                        // by name instead of typed — see PlayerAutocomplete —
+                        // so this slot can't fall out of sync with a roster
+                        // row that no longer exists or was never selected.
+                        <fieldset key={key} className="player-fieldset">
+                          <legend>{legend}</legend>
+                          <PlayerAutocomplete
+                            label={legend}
+                            roster={rosterForCategory}
+                            value={rosterSelections[key]}
+                            onChange={(selection) =>
+                              setRosterSelections((current) => ({ ...current, [key]: selection }))
+                            }
+                            excludeIds={Object.entries(rosterSelections)
+                              .filter(([slot]) => slot !== key)
+                              .map(([, selection]) => selection?.tournamentPlayerId)
+                              .filter((id): id is string => Boolean(id))}
+                          />
+                        </fieldset>
+                      ) : (
+                        <fieldset key={key} className="player-fieldset">
+                          <legend>{legend}</legend>
+                          {/* Wrapper, not the fieldset itself: a flex/grid
+                              fieldset turns its legend into a layout item and
+                              pulls it out of the border gap. */}
+                          <div className="field-row">
+                            <label>
+                              First name
+                              <input
+                                aria-label={`${legend} first name`}
+                                value={names[key].first}
+                                onChange={(e) =>
+                                  setNames((current) => ({
+                                    ...current,
+                                    [key]: { ...current[key], first: e.target.value },
+                                  }))
+                                }
+                                /* Not the operator's own name, so browser
+                                 autofill would offer the wrong person entirely. */
+                                autoComplete="off"
+                                spellCheck={false}
+                                required
+                              />
+                            </label>
+                            <label>
+                              Last name
+                              <input
+                                aria-label={`${legend} last name`}
+                                value={names[key].last}
+                                onChange={(e) =>
+                                  setNames((current) => ({
+                                    ...current,
+                                    [key]: { ...current[key], last: e.target.value },
+                                  }))
+                                }
+                                autoComplete="off"
+                                spellCheck={false}
+                                required
+                              />
+                            </label>
+                          </div>
+                        </fieldset>
+                      ),
+                    )}
                 </div>
               </fieldset>
 

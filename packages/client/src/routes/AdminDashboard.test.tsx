@@ -1,11 +1,22 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { Court, Match, MatchSummary, Umpire } from '@courtside/shared';
+import type { Court, Match, MatchSummary, TournamentPlayer, Umpire } from '@courtside/shared';
 import { QRCodeSVG } from 'qrcode.react';
 import { AdminDashboard } from './AdminDashboard.js';
 
 function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body } as Response;
+}
+
+/** A failed response whose body isn't JSON at all — e.g. a server that
+ * doesn't have the route yet, returning its default HTML 404 page. */
+function nonJsonErrorResponse(): Response {
+  return {
+    ok: false,
+    json: async (): Promise<unknown> => {
+      throw new SyntaxError('Unexpected token < in JSON');
+    },
+  } as unknown as Response;
 }
 
 const sampleMatches: MatchSummary[] = [
@@ -35,6 +46,35 @@ const sampleCourts: Court[] = [
 
 const sampleUmpires: Umpire[] = [
   { umpireId: 'u1', tournamentId: 'tournament-1', name: 'Uma Umpire' },
+];
+
+const sampleRoster: TournamentPlayer[] = [
+  {
+    tournamentPlayerId: 'tp-1',
+    tournamentId: 'tournament-1',
+    memberId: '1',
+    firstName: 'John',
+    lastName: 'Doe',
+    gender: 'M',
+    country: 'USA',
+    club: null,
+    birthDate: null,
+    categories: 'MS/MD',
+    status: 'Accepted',
+  },
+  {
+    tournamentPlayerId: 'tp-2',
+    tournamentId: 'tournament-1',
+    memberId: '2',
+    firstName: 'Jane',
+    lastName: 'Smith',
+    gender: 'F',
+    country: 'CAN',
+    club: null,
+    birthDate: null,
+    categories: 'WS/WD',
+    status: 'Accepted',
+  },
 ];
 
 function sampleCreatedMatch(overrides: Partial<Match> = {}): { match: Match; derived: unknown } {
@@ -71,10 +111,12 @@ function mockFetchRoutes(routes: {
   getMatches?: Response;
   getCourts?: Response;
   getUmpires?: Response;
+  getTournamentPlayers?: Response;
   getMatch?: Response;
   postMatches?: Response;
   postCourts?: Response;
   postUmpires?: Response;
+  postTournamentPlayersImport?: Response;
   deleteCourt?: Response;
   deleteUmpire?: Response;
 }) {
@@ -89,6 +131,10 @@ function mockFetchRoutes(routes: {
       return routes.getCourts ?? jsonResponse(sampleCourts);
     if (pathname === '/api/umpires' && method === 'GET')
       return routes.getUmpires ?? jsonResponse(sampleUmpires);
+    // No roster imported by default — every existing test exercises the
+    // manual name-entry path unless it opts into a roster explicitly.
+    if (pathname === '/api/tournament-players' && method === 'GET')
+      return routes.getTournamentPlayers ?? jsonResponse([]);
     if (url === '/api/matches' && method === 'POST') {
       return routes.postMatches ?? jsonResponse(sampleCreatedMatch());
     }
@@ -97,6 +143,9 @@ function mockFetchRoutes(routes: {
     }
     if (url === '/api/umpires' && method === 'POST') {
       return routes.postUmpires ?? jsonResponse(sampleUmpires[0]);
+    }
+    if (url === '/api/tournament-players/import' && method === 'POST') {
+      return routes.postTournamentPlayersImport ?? jsonResponse({ imported: 0, updated: 0, skipped: 0 });
     }
     if (url.startsWith('/api/courts/') && method === 'DELETE') {
       return routes.deleteCourt ?? jsonResponse({});
@@ -111,8 +160,14 @@ function mockFetchRoutes(routes: {
 // Both the court list and the umpire list render a "Remove" button, so a
 // bare role query is ambiguous — scope to the first (court) list, which
 // renders before the umpire one.
+// Courts and umpires each render a `.court-list` — courts first, so this is
+// the same "first of two" convention as umpireList() below.
+function courtList(): HTMLElement {
+  return document.querySelector('.court-list') as HTMLElement;
+}
+
 function courtRemoveButton(): HTMLElement {
-  return within(document.querySelector('.court-list')!).getByRole('button', { name: 'Remove' });
+  return within(courtList()).getByRole('button', { name: 'Remove' });
 }
 
 async function selectCourt() {
@@ -461,14 +516,42 @@ describe('AdminDashboard', () => {
       expect(await screen.findByText(/No courts yet/)).toBeInTheDocument();
     });
 
-    it('shows a court as Live when it has a current match assigned', async () => {
+    it('shows a court as Available with no live match on it', async () => {
+      mockFetchRoutes({ getCourts: jsonResponse(sampleCourts), getMatches: jsonResponse([]) });
+
+      render(<AdminDashboard />);
+
+      await screen.findByText('Court 1', { selector: 'span' });
+      expect(within(courtList()).getByText('Available')).toBeInTheDocument();
+    });
+
+    it('shows a court as Busy while a match assigned to it is live', async () => {
       mockFetchRoutes({
-        getCourts: jsonResponse([{ ...sampleCourts[0]!, currentMatchId: 'm1' }]),
+        getCourts: jsonResponse(sampleCourts),
+        getMatches: jsonResponse(sampleMatches), // sampleMatches[0] is CREATED, assignedCourtId 'c1'
       });
 
       render(<AdminDashboard />);
 
-      expect(await screen.findByText('Live')).toBeInTheDocument();
+      await screen.findByText('Court 1', { selector: 'span' });
+      expect(within(courtList()).getByText('Busy')).toBeInTheDocument();
+    });
+
+    it('shows a court as Available again once its match completes, even though it has hosted one before', async () => {
+      // Court.currentMatchId only ever gets set, never cleared, once a court
+      // has hosted a match — the bug this test guards against is trusting
+      // that field for "busy" instead of the match's actual status.
+      const completed: MatchSummary = { ...sampleMatches[0]!, status: 'COMPLETED' };
+      mockFetchRoutes({
+        getCourts: jsonResponse([{ ...sampleCourts[0]!, currentMatchId: 'm1' }]),
+        getMatches: jsonResponse([completed]),
+      });
+
+      render(<AdminDashboard />);
+
+      await screen.findByText('Court 1', { selector: 'span' });
+      expect(within(courtList()).getByText('Available')).toBeInTheDocument();
+      expect(within(courtList()).queryByText('Busy')).not.toBeInTheDocument();
     });
 
     it('lists courts with a tap-to-select TV link', async () => {
@@ -1167,6 +1250,212 @@ describe('AdminDashboard', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
 
       expect(await screen.findByText('Failed to create match.')).toBeInTheDocument();
+    });
+  });
+
+  describe('importing a player roster', () => {
+    it('imports a CSV file and shows a summary', async () => {
+      mockFetchRoutes({
+        postTournamentPlayersImport: jsonResponse({ imported: 2, updated: 0, skipped: 0 }),
+      });
+      render(<AdminDashboard />);
+
+      const file = new File(['FirstName,LastName\nJohn,Doe\nJane,Smith'], 'roster.csv', {
+        type: 'text/csv',
+      });
+      await userEvent.upload(screen.getByLabelText('Player list CSV file'), file);
+
+      expect(await screen.findByText('Imported 2 players, updated 0.')).toBeInTheDocument();
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/tournament-players/import',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    it('shows the server error message when import fails', async () => {
+      mockFetchRoutes({
+        postTournamentPlayersImport: jsonResponse(
+          { error: 'Selected tournament was not found.' },
+          false,
+        ),
+      });
+      render(<AdminDashboard />);
+
+      const file = new File(['FirstName,LastName\nJohn,Doe'], 'roster.csv', { type: 'text/csv' });
+      await userEvent.upload(screen.getByLabelText('Player list CSV file'), file);
+
+      expect(await screen.findByText('Selected tournament was not found.')).toBeInTheDocument();
+    });
+
+    it('still shows a status message when the server error response is not JSON', async () => {
+      // Reproduces a stale server build returning its default 404 HTML page
+      // for a route that doesn't exist yet — this used to throw inside the
+      // handler with no catch, leaving the admin with no feedback at all.
+      mockFetchRoutes({ postTournamentPlayersImport: nonJsonErrorResponse() });
+      render(<AdminDashboard />);
+
+      const file = new File(['FirstName,LastName\nJohn,Doe'], 'roster.csv', { type: 'text/csv' });
+      await userEvent.upload(screen.getByLabelText('Player list CSV file'), file);
+
+      expect(await screen.findByText('Failed to import players.')).toBeInTheDocument();
+    });
+
+    it('still shows a status message when the import request itself fails', async () => {
+      (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
+        if (url === '/api/tournament-players/import') throw new Error('network down');
+        return jsonResponse([]);
+      });
+      render(<AdminDashboard />);
+
+      const file = new File(['FirstName,LastName\nJohn,Doe'], 'roster.csv', { type: 'text/csv' });
+      await userEvent.upload(screen.getByLabelText('Player list CSV file'), file);
+
+      expect(
+        await screen.findByText('Failed to import players — check the connection and try again.'),
+      ).toBeInTheDocument();
+    });
+
+    it('reports rows it could not read at all, before even asking the server', async () => {
+      render(<AdminDashboard />);
+
+      const file = new File(['FirstName,LastName\nJohn,'], 'roster.csv', { type: 'text/csv' });
+      await userEvent.upload(screen.getByLabelText('Player list CSV file'), file);
+
+      expect(
+        await screen.findByText(
+          'No usable rows found in that file — every row needs at least a first and last name.',
+        ),
+      ).toBeInTheDocument();
+      expect(global.fetch).not.toHaveBeenCalledWith(
+        '/api/tournament-players/import',
+        expect.anything(),
+      );
+    });
+  });
+
+  describe('creating a match with an imported roster', () => {
+    beforeEach(() => {
+      mockFetchRoutes({ getTournamentPlayers: jsonResponse(sampleRoster) });
+    });
+
+    it('replaces the manual name fields with a player search', async () => {
+      render(<AdminDashboard />);
+
+      expect(await screen.findByLabelText('Side A player 1')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Side A player 1 first name')).not.toBeInTheDocument();
+    });
+
+    it('replaces the free-text category field with a select of imported categories', async () => {
+      render(<AdminDashboard />);
+      await screen.findByLabelText('Side A player 1');
+
+      const select = screen.getByLabelText('Category') as HTMLSelectElement;
+      expect(select.tagName).toBe('SELECT');
+      const optionLabels = Array.from(select.options).map((o) => o.value);
+      expect(optionLabels).toEqual(expect.arrayContaining(['MS', 'MD', 'WS', 'WD']));
+    });
+
+    it('creates a match from roster-selected players', async () => {
+      render(<AdminDashboard />);
+      await selectCourt();
+
+      await userEvent.type(await screen.findByLabelText('Side A player 1'), 'Joh');
+      await userEvent.click(await screen.findByRole('option', { name: /John Doe/ }));
+      await userEvent.type(screen.getByLabelText('Side B player 1'), 'Jan');
+      await userEvent.click(await screen.findByRole('option', { name: /Jane Smith/ }));
+      await userEvent.selectOptions(screen.getByLabelText('Category'), 'MS');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      await waitFor(() =>
+        expect(global.fetch).toHaveBeenCalledWith(
+          '/api/matches',
+          expect.objectContaining({
+            body: expect.stringContaining('"tournamentPlayerId":"tp-1"'),
+          }),
+        ),
+      );
+      const body = (global.fetch as jest.Mock).mock.calls.find((c) => c[0] === '/api/matches')?.[1]
+        ?.body as string;
+      const players = (JSON.parse(body) as { players: Array<Record<string, unknown>> }).players;
+      expect(players).toEqual([
+        { side: 'A', tournamentPlayerId: 'tp-1' },
+        { side: 'B', tournamentPlayerId: 'tp-2' },
+      ]);
+    });
+
+    it('blocks submission until every player slot has an actual selection, not just typed text', async () => {
+      render(<AdminDashboard />);
+      await selectCourt();
+      await userEvent.selectOptions(screen.getByLabelText('Category'), 'WS');
+
+      // Typed but never picked from the dropdown — satisfies the input's own
+      // `required` attribute while leaving no tournamentPlayerId behind.
+      await userEvent.type(await screen.findByLabelText('Side A player 1'), 'Joh');
+      await userEvent.type(screen.getByLabelText('Side B player 1'), 'Jan');
+      await userEvent.click(await screen.findByRole('option', { name: /Jane Smith/ }));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      expect(
+        await screen.findByText('Pick every player from the list before creating the match.'),
+      ).toBeInTheDocument();
+      expect(global.fetch).not.toHaveBeenCalledWith(
+        '/api/matches',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    it('pre-filters the player search to those registered for the selected category', async () => {
+      const roster: TournamentPlayer[] = [
+        { ...sampleRoster[0]!, tournamentPlayerId: 'tp-a', firstName: 'Chris', lastName: 'Adams', gender: 'M', categories: 'MS' },
+        { ...sampleRoster[0]!, tournamentPlayerId: 'tp-b', firstName: 'Chris', lastName: 'Baker', gender: 'F', categories: 'WS' },
+      ];
+      mockFetchRoutes({ getTournamentPlayers: jsonResponse(roster) });
+      render(<AdminDashboard />);
+      await screen.findByLabelText('Side A player 1');
+
+      await userEvent.selectOptions(screen.getByLabelText('Category'), 'MS');
+      await userEvent.type(screen.getByLabelText('Side A player 1'), 'Chr');
+
+      expect(screen.getByRole('option', { name: /Chris Adams/ })).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: /Chris Baker/ })).not.toBeInTheDocument();
+    });
+
+    it('does not filter the player search before a category has been chosen', async () => {
+      const roster: TournamentPlayer[] = [
+        { ...sampleRoster[0]!, tournamentPlayerId: 'tp-a', firstName: 'Chris', lastName: 'Adams', gender: 'M', categories: 'MS' },
+        { ...sampleRoster[0]!, tournamentPlayerId: 'tp-b', firstName: 'Chris', lastName: 'Baker', gender: 'F', categories: 'WS' },
+      ];
+      mockFetchRoutes({ getTournamentPlayers: jsonResponse(roster) });
+      render(<AdminDashboard />);
+
+      await userEvent.type(await screen.findByLabelText('Side A player 1'), 'Chr');
+
+      expect(screen.getByRole('option', { name: /Chris Adams/ })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /Chris Baker/ })).toBeInTheDocument();
+    });
+
+    it('re-filters the player search when the category is changed', async () => {
+      const roster: TournamentPlayer[] = [
+        { ...sampleRoster[0]!, tournamentPlayerId: 'tp-a', firstName: 'Chris', lastName: 'Adams', gender: 'M', categories: 'MS' },
+        { ...sampleRoster[0]!, tournamentPlayerId: 'tp-b', firstName: 'Chris', lastName: 'Baker', gender: 'F', categories: 'WS' },
+      ];
+      mockFetchRoutes({ getTournamentPlayers: jsonResponse(roster) });
+      render(<AdminDashboard />);
+      await screen.findByLabelText('Side A player 1');
+
+      await userEvent.selectOptions(screen.getByLabelText('Category'), 'MS');
+      await userEvent.type(screen.getByLabelText('Side A player 1'), 'Chr');
+      expect(screen.queryByRole('option', { name: /Chris Baker/ })).not.toBeInTheDocument();
+
+      await userEvent.selectOptions(screen.getByLabelText('Category'), 'WS');
+      // Changing the category blurs the search input (focus moves to the
+      // <select>), which closes the dropdown — re-focus it to see the list
+      // re-filtered against the new category.
+      await userEvent.click(screen.getByLabelText('Side A player 1'));
+      expect(screen.getByRole('option', { name: /Chris Baker/ })).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: /Chris Adams/ })).not.toBeInTheDocument();
     });
   });
 });

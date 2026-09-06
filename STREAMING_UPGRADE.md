@@ -364,14 +364,25 @@ network drop. In other words the leak is the normal case, not the edge case.
 
 Three defences, all now in `firestore-signal.ts`:
 
-| Guard                          | What it does                                                                              |
-| ------------------------------ | ----------------------------------------------------------------------------------------- |
-| Start-up purge                 | anything already in `viewers/` predates this broadcast, so it is deleted before listening |
-| `VIEWER_REQUEST_TTL_MS` (60 s) | an unanswered request older than this is treated as abandoned, not given a slot           |
-| `CONNECT_TIMEOUT_MS` (30 s)    | a peer that never reaches `connected` is dropped and its slot freed                       |
+| Guard                          | What it does                                                                                       |
+| ------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Start-up purge                 | anything older than `VIEWER_REQUEST_TTL_MS` is deleted before listening — see the correction below |
+| `VIEWER_REQUEST_TTL_MS` (60 s) | an unanswered request older than this is treated as abandoned, not given a slot                    |
+| `CONNECT_TIMEOUT_MS` (30 s)    | a peer that never reaches `connected` is dropped and its slot freed                                |
 
 Proved by planting six corpses (more than the cap of five) and confirming both
 a desktop and a phone viewer still connected, with all six purged.
+
+**⚠️ Correction, found later:** the first version of the start-up purge
+deleted **every** document in `viewers/` unconditionally, on the theory
+that anything predating this broadcast must be abandoned. That silently
+broke the ordinary case of a viewer opening the link _before_ the court
+pressed Start — their document was deleted, so the `onSnapshot` listener
+below never saw it as `added`, and they waited forever on a broadcast that
+was actually live. Reloading the page "fixed" it, which is exactly how it
+was reported. The purge is now scoped to the TTL, same as the row above:
+a recent, unanswered request is left alone and gets its offer the moment
+the broadcast starts.
 
 ---
 
@@ -786,7 +797,18 @@ If the desktop app restarts (or the server drops), the phone's Socket.io
 connection goes with it and **the broadcast does not restart** — someone must
 re-open the page and press Start. Observed for real during this work. Every
 viewer correctly shows "Waiting for the court to start streaming…", which is
-accurate but easy to misread as a bug.
+accurate but easy to misread as a bug. This is still true and unchanged.
+
+**What's no longer true: the viewer used to need a manual reload too.**
+A later pass added automatic reconnection to `public-viewer/index.html`
+(`connectAttempt`/`scheduleRetry`, with backoff and a visible "↻ Reconnect"
+button once automatic retries give up) — see 6d for the diagnostics that
+motivated it. A viewer whose connection drops, or who was already on the
+page when the court's broadcast restarts, now picks it back up on its own.
+The gap above is specifically the **broadcaster** (the court's phone)
+needing a human to press Start again — not the viewer needing to reload,
+which was the original, now-fixed symptom ("it did not refresh
+automatically when the transmission started and the user had to reload").
 
 ### 9.5 `ADMIN_PASSWORD` still defaults to `change-me`
 
@@ -881,15 +903,18 @@ npm test   # jest --coverage in every workspace
 
 | Workspace | Tests | Statements | Branches |
 | --------- | ----- | ---------- | -------- |
-| `client`  | 335   | 98.2%      | 97.3%    |
-| `server`  | 157   | 99.6%      | 98.7%    |
-| `shared`  | 90    | 100%       | 100%     |
+| `client`  | 382   | 98.4%      | 96.4%    |
+| `server`  | 193   | 99.7%      | 98.6%    |
+| `shared`  | 142   | 100%       | 98.1%    |
 
 Up from 186/112/90 (68.9%/82.5% statements on client/server) before the
 skill-driven refactor — see section 5b. Every streaming and signalling file
 (`webrtc-stream.ts`, `firestore-signal.ts`, `sockets/stream.ts`,
 `cloud-sync.ts`, both Stream screens, `useFullscreen`, `useWakeLock`) is now at
-or near 100%, closing the gap **HANDOFF.md** used to call out explicitly.
+or near 100%, closing the gap **HANDOFF.md** used to call out explicitly. The
+later growth in these numbers (335→382 client, 157→193 server, 90→142
+shared) is the unrelated player-roster-import feature, not more streaming
+work — see HANDOFF.md's "player roster import" section.
 
 ### Environment (`packages/server/.env`, gitignored)
 

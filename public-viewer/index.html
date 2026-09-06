@@ -1276,9 +1276,14 @@
         const shown = sets.length ? sets : [{ setNumber: 1, scoreA: 0, scoreB: 0 }];
 
         $('court').textContent = data.courtLabel || 'Court';
+        // Same fallback as TvScreen/UmpireScreen/StreamViewer: the category
+        // already implies "singles"/"doubles" when set, but with none set
+        // this page used to hide the badge entirely instead of falling back
+        // to matchType like every other screen does.
         const categoryEl = $('category');
-        categoryEl.textContent = data.category || '';
-        categoryEl.hidden = !data.category;
+        const categoryText = data.category || data.matchType || '';
+        categoryEl.textContent = categoryText;
+        categoryEl.hidden = !categoryText;
         $('board').hidden = false;
 
         for (const side of ['A', 'B']) {

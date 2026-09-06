@@ -1,5 +1,12 @@
 import { Router } from 'express';
-import type { MatchSummary, MatchType, ScoringConfig } from '@courtside/shared';
+import {
+  parseCategoryList,
+  validateMatchEligibility,
+  type MatchSummary,
+  type MatchType,
+  type ScoringConfig,
+  type Side,
+} from '@courtside/shared';
 import { prisma } from '../db/client.js';
 import { adminAuth } from '../middleware/adminAuth.js';
 import { generateJoinCode, generateUmpireToken } from '../match/tokens.js';
@@ -19,10 +26,25 @@ export function setMatchesSocketServer(server: Server): void {
   io = server;
 }
 
+interface CreateMatchPlayer {
+  side: Side;
+  /** Selects a roster row from the tournament's imported players — see
+   * TournamentPlayer. Preferred over `name`/`lastName` when the tournament
+   * has an imported roster; the server looks up and copies its name fields
+   * rather than trusting whatever the client also sent for them. */
+  tournamentPlayerId?: string;
+  name?: string;
+  lastName?: string;
+  shortName?: string;
+}
+
 interface CreateMatchBody {
   matchType: MatchType;
-  players: Array<{ side: 'A' | 'B'; name: string; lastName?: string; shortName?: string }>;
-  /** Competition category as announced, e.g. "BS U19". Free text, optional. */
+  players: CreateMatchPlayer[];
+  /** Competition category as announced, e.g. "BS U19". Free text, optional —
+   * unless the tournament has an imported roster, in which case it must be
+   * one of the categories that roster actually carries (see the check
+   * below the court/umpire lookups). */
   category?: string;
   scoringConfig: ScoringConfig;
   courtId?: string;
@@ -76,6 +98,101 @@ matchesRouter.post('/matches', adminAuth, async (req, res) => {
     return;
   }
 
+  const tournament = await prisma.tournament.findUnique({ where: { id: body.tournamentId } });
+  if (!tournament) {
+    res.status(400).json({ error: 'Selected tournament was not found.' });
+    return;
+  }
+
+  // Each player is either picked from the tournament's imported roster
+  // (tournamentPlayerId) or typed manually — see CreateMatchPlayer. Roster
+  // rows are looked up here, once, both to resolve the name to store and to
+  // feed validateMatchEligibility below; a manually-typed player simply has
+  // no roster data, so every eligibility check involving it is skipped.
+  const roster = await prisma.tournamentPlayer.findMany({
+    where: { tournamentId: body.tournamentId },
+  });
+  const rosterById = new Map(roster.map((r) => [r.id, r]));
+
+  interface ResolvedPlayer {
+    side: Side;
+    name: string;
+    lastName: string;
+    shortName: string | undefined;
+    tournamentPlayerId: string | null;
+    gender: string | null;
+    birthDate: Date | null;
+    categories: string | null;
+  }
+
+  const resolvedPlayers: ResolvedPlayer[] = [];
+  for (const p of body.players) {
+    if (p.tournamentPlayerId) {
+      const rosterRow = rosterById.get(p.tournamentPlayerId);
+      if (!rosterRow) {
+        res.status(400).json({ error: 'A selected player was not found in this roster.' });
+        return;
+      }
+      resolvedPlayers.push({
+        side: p.side,
+        name: rosterRow.firstName,
+        lastName: rosterRow.lastName,
+        shortName: p.shortName,
+        tournamentPlayerId: rosterRow.id,
+        gender: rosterRow.gender,
+        birthDate: rosterRow.birthDate,
+        categories: rosterRow.categories,
+      });
+      continue;
+    }
+
+    if (!p.name?.trim()) {
+      res.status(400).json({ error: 'Every player needs a name.' });
+      return;
+    }
+    resolvedPlayers.push({
+      side: p.side,
+      name: p.name.trim(),
+      lastName: p.lastName?.trim() ?? '',
+      shortName: p.shortName,
+      tournamentPlayerId: null,
+      gender: null,
+      birthDate: null,
+      categories: null,
+    });
+  }
+
+  const trimmedCategory = body.category?.trim() || null;
+
+  // Once a roster has been imported, category is no longer free text: it
+  // must be one of the codes that roster actually carries, so an admin
+  // cannot type a category no player is registered for.
+  if (trimmedCategory && roster.length > 0) {
+    const knownCategories = new Set(roster.flatMap((r) => parseCategoryList(r.categories)));
+    if (!knownCategories.has(trimmedCategory.toUpperCase())) {
+      res.status(400).json({
+        error: `"${trimmedCategory}" is not one of this tournament's imported categories.`,
+      });
+      return;
+    }
+  }
+
+  const eligibilityIssues = validateMatchEligibility(
+    body.matchType,
+    trimmedCategory,
+    resolvedPlayers.map((p) => ({
+      side: p.side,
+      gender: p.gender,
+      birthDate: p.birthDate?.toISOString() ?? null,
+      categories: p.categories,
+    })),
+    tournament.date,
+  );
+  if (eligibilityIssues.length > 0) {
+    res.status(400).json({ error: eligibilityIssues.map((issue) => issue.message).join(' ') });
+    return;
+  }
+
   // One match at a time per court. Without this the admin can queue several
   // matches onto the same court, and Court.currentMatchId — which is what the
   // TV subscribes to — silently follows only the newest of them.
@@ -120,21 +237,19 @@ matchesRouter.post('/matches', adminAuth, async (req, res) => {
       umpireToken: generateUmpireToken(),
       umpireCode: generateJoinCode(),
       tournamentId: body.tournamentId,
-      category: body.category?.trim() || null,
+      category: trimmedCategory,
       assignedCourtId: body.courtId,
       assignedUmpireId: body.umpireId,
       players: {
-        create: body.players.map((p) => {
-          const lastName = p.lastName?.trim() ?? '';
-          return {
-            side: p.side,
-            name: p.name,
-            lastName,
-            // Prefer the family name for the short form: on a TV wall two
-            // players sharing a given name are otherwise indistinguishable.
-            shortName: p.shortName?.trim() || (lastName || p.name).slice(0, 3).toUpperCase(),
-          };
-        }),
+        create: resolvedPlayers.map((p) => ({
+          side: p.side,
+          name: p.name,
+          lastName: p.lastName,
+          // Prefer the family name for the short form: on a TV wall two
+          // players sharing a given name are otherwise indistinguishable.
+          shortName: p.shortName?.trim() || (p.lastName || p.name).slice(0, 3).toUpperCase(),
+          tournamentPlayerId: p.tournamentPlayerId,
+        })),
       },
     },
   });

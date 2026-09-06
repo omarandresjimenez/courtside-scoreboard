@@ -484,6 +484,70 @@ measurements are in 6d.
    looked like a fix and changed nothing. Always verify a `relay` candidate is
    actually gathered before believing a relay works.
 
+## Later session — player roster import, category-aware matches, and two bugs found
+
+**What it added.** An admin can import a tournament's player list from a CSV
+export (MemberID, FirstName, LastName, Gender, Country, Club, BirthDate,
+Category, Status — a new `TournamentPlayer` table, additive like the
+earlier `Player`/`Match` column additions) instead of typing names per
+match. Once imported: creating a match picks players from a searchable
+dropdown (`PlayerAutocomplete` — opens the full list on focus, filters as
+you type from the first character, pre-filtered to whoever is registered
+for the category picked above it) instead of free-typed first/last name,
+and category becomes a closed `<select>` of the codes the roster actually
+carries instead of free text. A new validation service
+(`packages/shared/src/players.ts`, `validateMatchEligibility`) parses a
+category code (e.g. "MS U19") into gender/discipline/age-cap and checks the
+proposed line-up against it server-side at creation time — using whatever
+roster data is actually present, so a manually-typed player (or one with a
+blank field) just skips the checks that need it. A tournament with no
+imported roster falls back to the original manual form entirely.
+
+**Touch points in existing code, worth knowing about:**
+
+- `schema.prisma` — new `TournamentPlayer` model; `Player` gained a
+  `tournamentPlayerId` column (traceability only, not a formal relation —
+  a roster row can be edited or removed later without touching match
+  history already recorded).
+- `db/ensure-columns.ts` — now also creates missing _tables_
+  (`CREATE TABLE IF NOT EXISTS`), not just columns, so an existing
+  database upgrades in place the same way the `Player.lastName`/
+  `Match.category` additions did.
+- `routes/matches.ts` — `POST /matches` now resolves each player either by
+  `tournamentPlayerId` (looked up server-side, names copied from the
+  roster rather than trusted from the client) or the old `name`/`lastName`
+  shape; runs `validateMatchEligibility` before creating; rejects a
+  category not among the tournament's imported ones once a roster exists.
+- `AdminDashboard.tsx` — new "Import players" card; the create-match form
+  branches its player/category fields on whether `tournamentPlayers` is
+  non-empty.
+
+**Two real bugs found while building and testing this, both fixed:**
+
+1. **The admin Courts list showed a court as permanently "Live"** once it
+   had ever hosted a match. It read `Court.currentMatchId`, which the
+   server only ever _sets_ (at match creation) and never clears — the
+   field actually means "which match should this court's TV follow", not
+   "is a match live right now". Switched to the same occupied-court signal
+   (derived from the polled match list's `status`) already used correctly
+   to disable that same court in the "Create match" dropdown, and renamed
+   the labels to Busy/Available to match the umpire list.
+2. **A failed `fetch` whose response body wasn't JSON silently swallowed
+   the error** — reproduced live: a not-yet-restarted server returned its
+   default HTML 404 page for the new import route, `res.json()` threw
+   inside an `async` handler with no `catch`, and the admin saw no status
+   message at all. Every "show the server's error" call site in
+   `AdminDashboard.tsx` went through the same bare
+   `(await res.json()).error` pattern, so this could have bitten any of
+   them. Added a shared `readErrorMessage()` fallback and a `catch` around
+   the import handler for network-level failures too.
+
+Also fixed: the internet viewer (`public-viewer/index.html`) was missing
+the `category ?? matchType` fallback the other three score screens (TV,
+Umpire, LAN Stream Viewer) already had, so a match with no category hid
+the badge instead of showing "singles"/"doubles" — deployed straight to
+Firebase Hosting since this page has no build step.
+
 ## Desktop app (`packages/desktop/`) — Electron wrapper
 
 **Why:** running the server required Node install + `npm install` + hand-
@@ -761,14 +825,15 @@ npm run typecheck     # tsc --noEmit across every package
 npm test              # Jest --coverage in every package
 ```
 
-582 tests total across shared/server/client (90/157/335). Shared is 100%
-coverage on every metric; server is 99.6% statements / 98.7% branches; client
-is 98.2% statements / 97.3% branches — the remaining gaps are one
-intentionally-uncovered, documented branch in `AdminDashboard.tsx` (the
-not-yet-built "custom" scoring preset — see the comment at its call site), one
-branch in `matches.ts` documented as an istanbul coverage-merge artifact in
-`packages/server/jest.config.cjs`, and a handful of no-op `.catch(() => {})`
-handlers in `firestore-signal.ts` and `AdminDashboard.tsx`.
+717 tests total across shared/server/client (142/193/382). Shared is 100%
+statements/functions/lines, 98.1% branches; server is 99.7% statements /
+98.6% branches; client is 98.4% statements / 96.4% branches — the
+remaining gaps are one intentionally-uncovered, documented branch in
+`AdminDashboard.tsx` (the not-yet-built "custom" scoring preset — see the
+comment at its call site), one branch in `matches.ts` documented as an
+istanbul coverage-merge artifact in `packages/server/jest.config.cjs`, and
+a handful of no-op `.catch(() => {})` handlers in `firestore-signal.ts` and
+`AdminDashboard.tsx`.
 
 ✅ **The video-streaming and cloud-sync code, previously excluded from that
 claim, now has full unit coverage.** `webrtc-stream.ts`, `firestore-signal.ts`,
@@ -796,34 +861,37 @@ if this app keeps evolving.
 
 ## Quick "where do I look for X" index
 
-| Want to change...               | Look in                                                                       |
-| ------------------------------- | ----------------------------------------------------------------------------- |
-| Scoring rules / win conditions  | `packages/shared/src/scoring.ts`                                              |
-| Socket.io event names/payloads  | `packages/shared/src/events.ts`                                               |
-| Admin API routes                | `packages/server/src/routes/{courts,matches,umpires}.ts`                      |
-| Live scoring socket handlers    | `packages/server/src/sockets/index.ts`                                        |
-| Umpire/TV/Admin screens         | `packages/client/src/routes/*.tsx`                                            |
-| Umpire court diagram            | `packages/client/src/routes/CourtDiagram.tsx`                                 |
-| Umpire's spoken call text       | `packages/shared/src/calls.ts`                                                |
-| Confirm-before-acting dialog    | `packages/client/src/lib/ConfirmDialog.tsx`                                   |
-| Interval/break countdown        | `packages/client/src/lib/useCountdown.ts`                                     |
-| App-wide styling/theme          | `packages/client/src/styles.css`                                              |
-| Join-code entry flow            | `packages/client/src/routes/JoinScreen.tsx`                                   |
-| Error overlay (pre-React)       | `packages/client/index.html`                                                  |
-| Web page favicon                | `packages/client/public/favicon.png` (Vite copies `public/` verbatim)         |
-| Desktop app main process        | `packages/desktop/src/main.js`                                                |
-| Desktop app packaging config    | `packages/desktop/package.json` (`"build"` block)                             |
-| Desktop launcher window UI      | `packages/desktop/src/launcher.html` (plain HTML/JS, not the React app)       |
-| Tournament API routes           | `packages/server/src/routes/tournaments.ts`                                   |
-| Windows source zip helper       | `packages/desktop/scripts/pack-windows-source.js`                             |
-| Desktop app icon                | `packages/desktop/build-assets/` (`icon-source.html` is the editable source)  |
-| **Video streaming (any of it)** | **[STREAMING_UPGRADE.md](STREAMING_UPGRADE.md)** — start there, not here      |
-| Broadcaster / viewer screens    | `packages/client/src/routes/Stream{Broadcast,Viewer}.tsx`                     |
-| WebRTC over the LAN             | `packages/client/src/lib/webrtc-stream.ts` + `server/src/sockets/stream.ts`   |
-| WebRTC to internet viewers      | `packages/client/src/lib/firestore-signal.ts`                                 |
-| Public internet scoreboard      | `public-viewer/index.html` (static, no build step)                            |
-| Cloud score sync to Firestore   | `packages/server/src/integrations/cloud-sync.ts` (hook at `sockets/index.ts`) |
-| Firebase project / rules        | `.firebaserc`, `firebase.json`, `firestore.rules`                             |
+| Want to change...                  | Look in                                                                       |
+| ---------------------------------- | ----------------------------------------------------------------------------- |
+| Scoring rules / win conditions     | `packages/shared/src/scoring.ts`                                              |
+| Socket.io event names/payloads     | `packages/shared/src/events.ts`                                               |
+| Admin API routes                   | `packages/server/src/routes/{courts,matches,umpires,tournament-players}.ts`   |
+| Player roster import / CSV parsing | `packages/shared/src/{csv,players}.ts`, `routes/tournament-players.ts`        |
+| Match eligibility validation       | `packages/shared/src/players.ts` (`validateMatchEligibility`)                 |
+| Player search dropdown             | `packages/client/src/lib/PlayerAutocomplete.tsx`                              |
+| Live scoring socket handlers       | `packages/server/src/sockets/index.ts`                                        |
+| Umpire/TV/Admin screens            | `packages/client/src/routes/*.tsx`                                            |
+| Umpire court diagram               | `packages/client/src/routes/CourtDiagram.tsx`                                 |
+| Umpire's spoken call text          | `packages/shared/src/calls.ts`                                                |
+| Confirm-before-acting dialog       | `packages/client/src/lib/ConfirmDialog.tsx`                                   |
+| Interval/break countdown           | `packages/client/src/lib/useCountdown.ts`                                     |
+| App-wide styling/theme             | `packages/client/src/styles.css`                                              |
+| Join-code entry flow               | `packages/client/src/routes/JoinScreen.tsx`                                   |
+| Error overlay (pre-React)          | `packages/client/index.html`                                                  |
+| Web page favicon                   | `packages/client/public/favicon.png` (Vite copies `public/` verbatim)         |
+| Desktop app main process           | `packages/desktop/src/main.js`                                                |
+| Desktop app packaging config       | `packages/desktop/package.json` (`"build"` block)                             |
+| Desktop launcher window UI         | `packages/desktop/src/launcher.html` (plain HTML/JS, not the React app)       |
+| Tournament API routes              | `packages/server/src/routes/tournaments.ts`                                   |
+| Windows source zip helper          | `packages/desktop/scripts/pack-windows-source.js`                             |
+| Desktop app icon                   | `packages/desktop/build-assets/` (`icon-source.html` is the editable source)  |
+| **Video streaming (any of it)**    | **[STREAMING_UPGRADE.md](STREAMING_UPGRADE.md)** — start there, not here      |
+| Broadcaster / viewer screens       | `packages/client/src/routes/Stream{Broadcast,Viewer}.tsx`                     |
+| WebRTC over the LAN                | `packages/client/src/lib/webrtc-stream.ts` + `server/src/sockets/stream.ts`   |
+| WebRTC to internet viewers         | `packages/client/src/lib/firestore-signal.ts`                                 |
+| Public internet scoreboard         | `public-viewer/index.html` (static, no build step)                            |
+| Cloud score sync to Firestore      | `packages/server/src/integrations/cloud-sync.ts` (hook at `sockets/index.ts`) |
+| Firebase project / rules           | `.firebaserc`, `firebase.json`, `firestore.rules`                             |
 
 ## Packaged desktop recovery: `tsx`, legacy SQLite databases, and a broken Mac signature
 

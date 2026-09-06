@@ -2487,3 +2487,76 @@ button[aria-busy='true'] {
 .stream-player-row strong {
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------------------------------------------------------------------------
+   Import players / autocomplete
+   --------------------------------------------------------------------------- */
+
+/* Sits above the two-column grid, so it reads as one wide card rather than
+   competing with the Courts/Umpires column for space. */
+.roster-import-card {
+  margin-bottom: 0.6rem;
+}
+
+.file-input-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-width: 28rem;
+}
+
+/* A relative anchor for the dropdown below — the input itself stays a plain
+   block-level field so it lines up with every other label in the form. */
+.player-autocomplete-input {
+  position: relative;
+}
+
+.player-autocomplete-dropdown {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 0.3rem;
+  list-style: none;
+  max-height: 12rem;
+  overflow-y: auto;
+  background: var(--bg-raised-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.player-autocomplete-dropdown li + li {
+  margin-top: 0.15rem;
+}
+
+.player-autocomplete-dropdown button {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.player-autocomplete-dropdown button:hover,
+.player-autocomplete-dropdown button:focus-visible,
+.player-autocomplete-dropdown button[aria-selected='true'] {
+  background: var(--bg-raised);
+  outline: none;
+}
+
+.player-autocomplete-club {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}

@@ -40,6 +40,37 @@ export interface Player {
   lastName: string;
   /** Used on space-constrained TV layouts. */
   shortName: string;
+  /** The roster entry this player was selected from, if any — see
+   * TournamentPlayer. Null for a manually-typed player (no import, or the
+   * tournament has no roster). Purely for traceability; scoreboard display
+   * always uses the name/lastName copied onto this row at creation time. */
+  tournamentPlayerId?: string | null;
+}
+
+/**
+ * One row of a tournament's imported player roster — parsed from a CSV
+ * export (MemberID, FirstName, LastName, Gender, Country, Club, BirthDate,
+ * Category, Status) via packages/shared/src/players.ts, and picked from an
+ * autocomplete when creating a match instead of retyping a name. See
+ * AdminDashboard's "Import players" card.
+ */
+export interface TournamentPlayer {
+  tournamentPlayerId: string;
+  tournamentId: string;
+  /** The source system's id for this player, when the export has one. */
+  memberId: string | null;
+  firstName: string;
+  lastName: string;
+  /** "M" | "F", or null — not every export includes it. */
+  gender: string | null;
+  country: string | null;
+  club: string | null;
+  /** ISO date (yyyy-mm-dd), or null. */
+  birthDate: string | null;
+  /** Raw slash-separated codes as imported, e.g. "MS/MD/XD". */
+  categories: string;
+  /** Defaults to "Accepted" when the export doesn't specify one. */
+  status: string;
 }
 
 export interface Court {
