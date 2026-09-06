@@ -548,6 +548,47 @@ Umpire, LAN Stream Viewer) already had, so a match with no category hid
 the badge instead of showing "singles"/"doubles" — deployed straight to
 Firebase Hosting since this page has no build step.
 
+## Later session — a persistent, CA-signed camera cert + mDNS, instead of a fresh self-signed one every boot
+
+Full detail lives in **STREAMING_UPGRADE.md section 7.6**; short version here.
+
+**The problem:** the camera-capture HTTPS listener's cert was regenerated
+from scratch on every server start with only `commonName: localhost` set —
+so even a phone that had clicked through the "not private" warning once saw
+a brand new one the very next restart, and modern browsers validate hostname
+against the certificate's SAN (which didn't exist), not the CN.
+
+**What shipped:**
+
+- `integrations/local-tls.ts` — a small local Certificate Authority,
+  generated once and persisted to `~/.courtside-scoreboard/certs/`, signing
+  a long-lived leaf cert whose SAN lists `localhost`, `127.0.0.1`, `::1`,
+  `config.mdnsHostname`, and every LAN IPv4 address the machine had at first
+  boot.
+- `integrations/mdns.ts` — advertises the server at `config.mdnsHostname`
+  (`courtside.local` by default) via `bonjour-service`, so a device relies
+  on a name instead of a DHCP-assigned IP that can change between matches.
+- `routes/local-ca.ts` — `GET /api/local-ca.pem`, unauthenticated, serves
+  only the CA's certificate (never its key) with
+  `Content-Type: application/x-x509-ca-cert` so iOS/Android offer to
+  install it as a trusted profile. Reachable over **plain HTTP** — it can't
+  itself require a trust the phone doesn't have yet.
+- `AdminDashboard.tsx` — a standing "Trust this phone for camera streaming"
+  card (not tied to any match) with a QR code for that download link and
+  collapsed install steps for iOS/Android.
+
+**The real gap this doesn't close:** `.local` resolution isn't universal —
+native on iPhone, only Android 13+, and Windows needs Apple's Bonjour
+service installed separately (researched before building this, since it
+changes whether mDNS alone is "the fix" or just "the best case"). A device
+that can't resolve it falls back to the LAN-IP link exactly as before; the
+persistent cert (its SAN includes the IP too) still means that fallback
+survives an app restart, just not a change in the IP itself.
+
+`MDNS_ENABLED=false` disables mDNS entirely for a venue that blocks
+multicast; `MDNS_HOSTNAME` and `LOCAL_TLS_DIR` are both overridable — see
+the Configuration reference below.
+
 ## Desktop app (`packages/desktop/`) — Electron wrapper
 
 **Why:** running the server required Node install + `npm install` + hand-
@@ -776,6 +817,10 @@ HTTPS_PORT=3001                    # optional, defaults to PORT + 1 (camera/secu
 ADMIN_PASSWORD=<real password>     # optional, falls back to 'change-me' (insecure — always set this)
 DATABASE_URL="file:./dev.db"       # REQUIRED, no fallback — Prisma throws without it
 CLIENT_DIST_PATH=<path>            # optional, defaults to ../client/dist relative to CWD
+MDNS_HOSTNAME=courtside.local      # optional — the name advertised over mDNS, see the
+                                    # "persistent camera cert + mDNS" session below
+MDNS_ENABLED=true                  # optional — "false" disables mDNS (blocked-multicast venues)
+LOCAL_TLS_DIR=<path>               # optional, defaults to ~/.courtside-scoreboard/certs
 
 # Optional — cloud score sync only. Absent, the server logs
 # "[Cloud] Firebase credentials not found" and runs normally on the LAN.
@@ -825,9 +870,11 @@ npm run typecheck     # tsc --noEmit across every package
 npm test              # Jest --coverage in every package
 ```
 
-717 tests total across shared/server/client (142/193/382). Shared is 100%
+741 tests total across shared/server/client (142/213/386). Shared is 100%
 statements/functions/lines, 98.1% branches; server is 99.7% statements /
-98.6% branches; client is 98.4% statements / 96.4% branches — the
+98.6% branches — `local-tls.ts`, `mdns.ts` and `local-ca.ts` (the persistent
+camera cert + mDNS work) are all at 100%; client is 98.4% statements / 96.4%
+branches — the
 remaining gaps are one intentionally-uncovered, documented branch in
 `AdminDashboard.tsx` (the not-yet-built "custom" scoring preset — see the
 comment at its call site), one branch in `matches.ts` documented as an
@@ -861,37 +908,40 @@ if this app keeps evolving.
 
 ## Quick "where do I look for X" index
 
-| Want to change...                  | Look in                                                                       |
-| ---------------------------------- | ----------------------------------------------------------------------------- |
-| Scoring rules / win conditions     | `packages/shared/src/scoring.ts`                                              |
-| Socket.io event names/payloads     | `packages/shared/src/events.ts`                                               |
-| Admin API routes                   | `packages/server/src/routes/{courts,matches,umpires,tournament-players}.ts`   |
-| Player roster import / CSV parsing | `packages/shared/src/{csv,players}.ts`, `routes/tournament-players.ts`        |
-| Match eligibility validation       | `packages/shared/src/players.ts` (`validateMatchEligibility`)                 |
-| Player search dropdown             | `packages/client/src/lib/PlayerAutocomplete.tsx`                              |
-| Live scoring socket handlers       | `packages/server/src/sockets/index.ts`                                        |
-| Umpire/TV/Admin screens            | `packages/client/src/routes/*.tsx`                                            |
-| Umpire court diagram               | `packages/client/src/routes/CourtDiagram.tsx`                                 |
-| Umpire's spoken call text          | `packages/shared/src/calls.ts`                                                |
-| Confirm-before-acting dialog       | `packages/client/src/lib/ConfirmDialog.tsx`                                   |
-| Interval/break countdown           | `packages/client/src/lib/useCountdown.ts`                                     |
-| App-wide styling/theme             | `packages/client/src/styles.css`                                              |
-| Join-code entry flow               | `packages/client/src/routes/JoinScreen.tsx`                                   |
-| Error overlay (pre-React)          | `packages/client/index.html`                                                  |
-| Web page favicon                   | `packages/client/public/favicon.png` (Vite copies `public/` verbatim)         |
-| Desktop app main process           | `packages/desktop/src/main.js`                                                |
-| Desktop app packaging config       | `packages/desktop/package.json` (`"build"` block)                             |
-| Desktop launcher window UI         | `packages/desktop/src/launcher.html` (plain HTML/JS, not the React app)       |
-| Tournament API routes              | `packages/server/src/routes/tournaments.ts`                                   |
-| Windows source zip helper          | `packages/desktop/scripts/pack-windows-source.js`                             |
-| Desktop app icon                   | `packages/desktop/build-assets/` (`icon-source.html` is the editable source)  |
-| **Video streaming (any of it)**    | **[STREAMING_UPGRADE.md](STREAMING_UPGRADE.md)** — start there, not here      |
-| Broadcaster / viewer screens       | `packages/client/src/routes/Stream{Broadcast,Viewer}.tsx`                     |
-| WebRTC over the LAN                | `packages/client/src/lib/webrtc-stream.ts` + `server/src/sockets/stream.ts`   |
-| WebRTC to internet viewers         | `packages/client/src/lib/firestore-signal.ts`                                 |
-| Public internet scoreboard         | `public-viewer/index.html` (static, no build step)                            |
-| Cloud score sync to Firestore      | `packages/server/src/integrations/cloud-sync.ts` (hook at `sockets/index.ts`) |
-| Firebase project / rules           | `.firebaserc`, `firebase.json`, `firestore.rules`                             |
+| Want to change...                    | Look in                                                                       |
+| ------------------------------------ | ----------------------------------------------------------------------------- |
+| Scoring rules / win conditions       | `packages/shared/src/scoring.ts`                                              |
+| Socket.io event names/payloads       | `packages/shared/src/events.ts`                                               |
+| Admin API routes                     | `packages/server/src/routes/{courts,matches,umpires,tournament-players}.ts`   |
+| Player roster import / CSV parsing   | `packages/shared/src/{csv,players}.ts`, `routes/tournament-players.ts`        |
+| Match eligibility validation         | `packages/shared/src/players.ts` (`validateMatchEligibility`)                 |
+| Player search dropdown               | `packages/client/src/lib/PlayerAutocomplete.tsx`                              |
+| Live scoring socket handlers         | `packages/server/src/sockets/index.ts`                                        |
+| Umpire/TV/Admin screens              | `packages/client/src/routes/*.tsx`                                            |
+| Umpire court diagram                 | `packages/client/src/routes/CourtDiagram.tsx`                                 |
+| Umpire's spoken call text            | `packages/shared/src/calls.ts`                                                |
+| Confirm-before-acting dialog         | `packages/client/src/lib/ConfirmDialog.tsx`                                   |
+| Interval/break countdown             | `packages/client/src/lib/useCountdown.ts`                                     |
+| App-wide styling/theme               | `packages/client/src/styles.css`                                              |
+| Join-code entry flow                 | `packages/client/src/routes/JoinScreen.tsx`                                   |
+| Error overlay (pre-React)            | `packages/client/index.html`                                                  |
+| Web page favicon                     | `packages/client/public/favicon.png` (Vite copies `public/` verbatim)         |
+| Desktop app main process             | `packages/desktop/src/main.js`                                                |
+| Desktop app packaging config         | `packages/desktop/package.json` (`"build"` block)                             |
+| Desktop launcher window UI           | `packages/desktop/src/launcher.html` (plain HTML/JS, not the React app)       |
+| Tournament API routes                | `packages/server/src/routes/tournaments.ts`                                   |
+| Windows source zip helper            | `packages/desktop/scripts/pack-windows-source.js`                             |
+| Desktop app icon                     | `packages/desktop/build-assets/` (`icon-source.html` is the editable source)  |
+| **Video streaming (any of it)**      | **[STREAMING_UPGRADE.md](STREAMING_UPGRADE.md)** — start there, not here      |
+| Broadcaster / viewer screens         | `packages/client/src/routes/Stream{Broadcast,Viewer}.tsx`                     |
+| WebRTC over the LAN                  | `packages/client/src/lib/webrtc-stream.ts` + `server/src/sockets/stream.ts`   |
+| WebRTC to internet viewers           | `packages/client/src/lib/firestore-signal.ts`                                 |
+| Public internet scoreboard           | `public-viewer/index.html` (static, no build step)                            |
+| Cloud score sync to Firestore        | `packages/server/src/integrations/cloud-sync.ts` (hook at `sockets/index.ts`) |
+| Camera cert / local CA               | `packages/server/src/integrations/local-tls.ts`                               |
+| mDNS advertisement (courtside.local) | `packages/server/src/integrations/mdns.ts`                                    |
+| CA cert download route               | `packages/server/src/routes/local-ca.ts`                                      |
+| Firebase project / rules             | `.firebaserc`, `firebase.json`, `firestore.rules`                             |
 
 ## Packaged desktop recovery: `tsx`, legacy SQLite databases, and a broken Mac signature
 

@@ -2560,3 +2560,42 @@ button[aria-busy='true'] {
   font-size: 0.78rem;
   white-space: nowrap;
 }
+
+/* ---------------------------------------------------------------------------
+   Trust this phone for camera streaming
+   --------------------------------------------------------------------------- */
+
+.trust-camera-card {
+  margin-bottom: 0.6rem;
+}
+
+.trust-camera-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.trust-camera-body details {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.trust-camera-body summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.trust-camera-steps {
+  margin: 0.6rem 0 0;
+  padding-left: 1.2rem;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.trust-camera-steps li + li {
+  margin-top: 0.5rem;
+}

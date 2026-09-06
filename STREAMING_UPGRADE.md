@@ -575,6 +575,10 @@ configuration reference):
 ```
 HTTPS_PORT=3001                    # optional, defaults to PORT + 1
 
+MDNS_HOSTNAME=courtside.local      # optional — see 7.6; the name advertised over mDNS
+MDNS_ENABLED=true                  # optional — set to "false" if the venue blocks multicast
+LOCAL_TLS_DIR=~/.courtside-scoreboard/certs  # optional — where the persistent CA/cert live
+
 FIREBASE_PROJECT_ID=<id>           # REQUIRED for cloud sync
 FIREBASE_PRIVATE_KEY="<pem>"       # REQUIRED — keep the \n escapes; unescaped at runtime
 FIREBASE_CLIENT_EMAIL=<email>      # REQUIRED — cert() needs all three
@@ -671,15 +675,67 @@ is independent of `npm run build`. The React client _does_ need
 
 ### 7.5 Network requirements on match day
 
-| Need                                                    | Why                                                                                          |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Phone reaches the laptop's **HTTPS** listener (`:3001`) | `getUserMedia` requires a secure context; the self-signed cert warning must be accepted once |
-| Laptop has internet                                     | to push scores to Firestore                                                                  |
-| Phone has internet                                      | to signal to internet viewers via Firestore                                                  |
-| —                                                       | Internet viewers need **no** access to the venue network at all                              |
+| Need                                                    | Why                                                                                                                                     |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Phone reaches the laptop's **HTTPS** listener (`:3001`) | `getUserMedia` requires a secure context; the cert warning must be accepted once per phone — see 7.6 for what "once" now actually means |
+| Laptop has internet                                     | to push scores to Firestore                                                                                                             |
+| Phone has internet                                      | to signal to internet viewers via Firestore                                                                                             |
+| —                                                       | Internet viewers need **no** access to the venue network at all                                                                         |
 
 If the venue has no uplink, everything still works on the LAN; only the public
 page goes stale.
+
+### 7.6 Making "accept the warning once" actually mean once
+
+The self-signed cert originally described above had two problems, both found
+by actually going through the warning flow on a phone rather than reading the
+code:
+
+1. **It was regenerated on every server start.** A phone that had trusted it
+   once saw a brand new "not private" warning the very next time the app
+   restarted — nothing was ever durable to trust.
+2. **It set `commonName: localhost` and nothing else.** A phone reaches this
+   server by LAN IP, not the literal string "localhost", and modern browsers
+   validate the hostname against the certificate's Subject Alternative Name
+   (SAN), not the CN.
+
+**What shipped:** a small local Certificate Authority
+(`packages/server/src/integrations/local-tls.ts`), generated once and
+persisted to `~/.courtside-scoreboard/certs/`, which signs a long-lived leaf
+certificate listing every name/address the server might be reached by —
+`localhost`, `127.0.0.1`, `::1`, `config.mdnsHostname` (`courtside.local` by
+default — see below), and every non-loopback IPv4 address the machine had at
+first boot. A phone that installs and trusts the CA once (via
+`GET /api/local-ca.pem`, served with `Content-Type: application/x-x509-ca-cert`
+so iOS/Android offer to install it as a profile, and reachable over **plain
+HTTP** — chicken-and-egg: it can't require a trust the phone doesn't have
+yet) never sees the warning again for anything this CA has signed, including
+across app restarts.
+
+**The remaining gap this doesn't close on its own:** an IP baked into the SAN
+list stops being useful the moment the venue's DHCP hands out a different
+one — a stable identity needs a stable _name_, not just a persistent
+certificate. That's what `packages/server/src/integrations/mdns.ts` adds:
+`bonjour-service` advertises the server at `config.mdnsHostname`
+(`courtside.local`) over mDNS, so `.local` resolution — not the specific
+IP — is what a device relies on. Combined with the persistent cert above,
+trusting the CA once means the warning is gone for good, even across a venue
+change that gives the laptop a new IP.
+
+**Where this doesn't reach:** `.local` resolution isn't universal —
+
+| Platform               | `.local` resolution                                                         |
+| ---------------------- | --------------------------------------------------------------------------- |
+| iPhone (Safari/Chrome) | Native, always works                                                        |
+| Android                | Only 13+ (the DNS Resolver Mainline module) — older phones don't resolve it |
+| Windows                | Not built in at all — needs Apple's Bonjour service installed separately    |
+
+A device that can't resolve `courtside.local` falls back to the LAN-IP link
+exactly as before — no worse than the original behaviour, and the persistent
+cert still means that IP-based link survives an app restart for as long as
+the IP itself doesn't change. `MDNS_ENABLED=false` turns mDNS off entirely
+for a venue where multicast is blocked (some corporate/conference APs do
+this); `MDNS_HOSTNAME` overrides the advertised name.
 
 ---
 

@@ -361,7 +361,9 @@ export function AdminDashboard() {
       const text = await readFileAsText(file);
       const { rows, skipped: unreadableRows } = parseTournamentPlayersCsv(text);
       if (rows.length === 0) {
-        setStatus('No usable rows found in that file — every row needs at least a first and last name.');
+        setStatus(
+          'No usable rows found in that file — every row needs at least a first and last name.',
+        );
         return;
       }
 
@@ -483,7 +485,12 @@ export function AdminDashboard() {
     const slots: PlayerSlot[] = matchType === 'singles' ? ['a1', 'b1'] : ['a1', 'a2', 'b1', 'b2'];
     const sideOf = (key: PlayerSlot): Side => (key.startsWith('a') ? 'A' : 'B');
 
-    let players: Array<{ side: Side; tournamentPlayerId?: string; name?: string; lastName?: string }>;
+    let players: Array<{
+      side: Side;
+      tournamentPlayerId?: string;
+      name?: string;
+      lastName?: string;
+    }>;
 
     if (hasRoster) {
       const missingSlot = slots.find((key) => !rosterSelections[key]);
@@ -581,6 +588,43 @@ export function AdminDashboard() {
           {status}
         </p>
       )}
+
+      <section className="admin-card trust-camera-card">
+        <h2>Trust this phone for camera streaming</h2>
+        <p className="section-hint">
+          The camera page needs a secure connection, so browsers show a one-time security warning
+          the first time a phone opens it. Scan this once per phone that will ever film a match —
+          after that, the warning won&rsquo;t come back, even across restarts or a different court.
+        </p>
+        <div className="trust-camera-body">
+          <figure className="qr-code">
+            <QRCodeSVG
+              value={absoluteUrl('/api/local-ca.pem')}
+              size={96}
+              bgColor="#ffffff"
+              fgColor="#0a0e1a"
+              marginSize={1}
+              title="QR code to install this server's camera-streaming certificate"
+            />
+            <figcaption>Scan on the filming phone</figcaption>
+          </figure>
+          <details>
+            <summary>Show install steps</summary>
+            <ol className="trust-camera-steps">
+              <li>
+                <strong>iPhone:</strong> tap the downloaded profile, then Settings → General → VPN
+                &amp; Device Management → tap it again → Install. Then Settings → General → About →
+                Certificate Trust Settings → turn on full trust for &ldquo;Courtside Scoreboard
+                Local CA&rdquo;.
+              </li>
+              <li>
+                <strong>Android:</strong> tap the downloaded file, choose &ldquo;CA
+                certificate&rdquo; when asked what kind of certificate this is.
+              </li>
+            </ol>
+          </details>
+        </div>
+      </section>
 
       {tournamentId && (
         <section className="admin-card roster-import-card">

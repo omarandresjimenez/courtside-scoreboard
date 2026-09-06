@@ -8,7 +8,11 @@ match day; everything runs on one machine over a local Wi-Fi network.
 Optionally, a court-side phone can also **stream live video** to viewers, and
 scores can be mirrored to a **public web page** anyone on the internet can open.
 Both are additive: with no internet — or no Firebase credentials configured —
-the app behaves exactly as described above. See
+the app behaves exactly as described above. Camera capture needs a secure
+connection, so the first phone to open the broadcast link sees a one-time
+security-certificate prompt; installing it (a QR code and short instructions
+are right on the admin dashboard) means that phone never sees it again, even
+across restarts — see STREAMING_UPGRADE.md section 7.6. See
 [STREAMING_UPGRADE.md](STREAMING_UPGRADE.md) for how that works and what it
 needs; [HANDOFF.md](HANDOFF.md) is the "how it actually works and why" doc for
 everything else.

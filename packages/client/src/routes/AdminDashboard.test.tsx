@@ -189,6 +189,43 @@ beforeEach(() => {
 });
 
 describe('AdminDashboard', () => {
+  describe('trust this phone for camera streaming', () => {
+    it('shows the card even when no tournament is selected', () => {
+      localStorage.removeItem('courtside:tournamentId');
+      window.history.replaceState({}, '', '/admin');
+      render(<AdminDashboard />);
+
+      expect(
+        screen.getByRole('heading', { name: 'Trust this phone for camera streaming' }),
+      ).toBeInTheDocument();
+    });
+
+    it('renders a QR code for installing the CA certificate', () => {
+      render(<AdminDashboard />);
+
+      expect(
+        screen.getByTitle("QR code to install this server's camera-streaming certificate"),
+      ).toBeInTheDocument();
+    });
+
+    it('keeps the install steps collapsed behind a disclosure until expanded', () => {
+      render(<AdminDashboard />);
+
+      const details = screen.getByText('Show install steps').closest('details');
+      expect(details).not.toHaveAttribute('open');
+      expect(screen.getByText(/Certificate Trust Settings/)).toBeInTheDocument();
+    });
+
+    it('expands to show iPhone and Android install steps', async () => {
+      render(<AdminDashboard />);
+
+      await userEvent.click(screen.getByText('Show install steps'));
+
+      expect(screen.getByText(/iPhone:/)).toBeInTheDocument();
+      expect(screen.getByText(/Android:/)).toBeInTheDocument();
+    });
+  });
+
   it('never shows a password prompt — this is a single-admin, LAN-only tool', () => {
     render(<AdminDashboard />);
     expect(screen.queryByLabelText('Admin password')).not.toBeInTheDocument();

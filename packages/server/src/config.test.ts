@@ -30,6 +30,26 @@ describe('config', () => {
     expect(config.port).toBe(4000);
     expect(config.adminPassword).toBe('a-real-secret');
   });
+
+  it('defaults mdnsHostname to courtside.local and mdnsEnabled to true', async () => {
+    delete process.env.MDNS_HOSTNAME;
+    delete process.env.MDNS_ENABLED;
+    const { config } = await import('./config.js');
+    expect(config.mdnsHostname).toBe('courtside.local');
+    expect(config.mdnsEnabled).toBe(true);
+  });
+
+  it('reads MDNS_HOSTNAME from the environment when set', async () => {
+    process.env.MDNS_HOSTNAME = 'my-venue.local';
+    const { config } = await import('./config.js');
+    expect(config.mdnsHostname).toBe('my-venue.local');
+  });
+
+  it('disables mDNS only when MDNS_ENABLED is exactly "false"', async () => {
+    process.env.MDNS_ENABLED = 'false';
+    const { config } = await import('./config.js');
+    expect(config.mdnsEnabled).toBe(false);
+  });
 });
 
 describe('required', () => {
