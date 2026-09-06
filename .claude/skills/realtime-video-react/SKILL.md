@@ -148,7 +148,7 @@ useEffect(() => {
 
 This codebase already implements much of the above; a few points diverge deliberately,
 and the reasons are worth knowing before "correcting" them. See
-[STREAMING_UPGRADE.md](../../../STREAMING_UPGRADE.md) for the full record.
+[STREAMING_UPGRADE.md](../../../docs/STREAMING_UPGRADE.md) for the full record.
 
 - **`iceServers: []` does not apply to the internet path.** The guidance in §3B is
   correct for a _closed_ LAN. This app also serves viewers over the public internet

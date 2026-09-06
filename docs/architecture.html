@@ -1,0 +1,889 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Courtside Scoreboard — Architecture</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f8fafc;
+        --panel: #ffffff;
+        --panel-2: #f1f5f9;
+        --border: #e2e8f0;
+        --border-strong: #cbd5e1;
+        --text: #0f172a;
+        --text-dim: #475569;
+        --text-faint: #94a3b8;
+        --accent: #0891b2;
+        --accent-soft: #ecfeff;
+        --devices: #0891b2;
+        --hub: #7c3aed;
+        --cloud: #d97706;
+        --shared: #059669;
+        --radius: 0.75rem;
+        --radius-sm: 0.5rem;
+        --shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.06);
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          'Segoe UI',
+          Roboto,
+          sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        -webkit-font-smoothing: antialiased;
+        line-height: 1.5;
+      }
+
+      main {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 2rem 1.5rem 4rem;
+      }
+
+      header.page-header {
+        padding: 0 0 1.5rem;
+      }
+
+      header.page-header h1 {
+        margin: 0 0 0.4rem;
+        font-size: 1.9rem;
+        letter-spacing: -0.01em;
+      }
+
+      header.page-header p {
+        margin: 0;
+        max-width: 62ch;
+        color: var(--text-dim);
+      }
+
+      .top-links {
+        display: flex;
+        gap: 0.75rem;
+        margin-top: 1rem;
+        flex-wrap: wrap;
+      }
+
+      .top-links a {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--accent);
+        text-decoration: none;
+        border: 1px solid var(--border-strong);
+        background: var(--panel);
+        padding: 0.4rem 0.8rem;
+        border-radius: 999px;
+      }
+
+      .top-links a:hover {
+        background: var(--accent-soft);
+      }
+
+      section.legend {
+        display: flex;
+        gap: 1.5rem;
+        flex-wrap: wrap;
+        align-items: center;
+        font-size: 0.8rem;
+        color: var(--text-dim);
+        margin-bottom: 1.25rem;
+      }
+
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+      }
+
+      .legend-line {
+        width: 2rem;
+        height: 0;
+        border-top: 2px solid var(--text-faint);
+      }
+
+      .legend-line.dashed {
+        border-top-style: dashed;
+      }
+
+      .legend-swatch {
+        width: 0.7rem;
+        height: 0.7rem;
+        border-radius: 999px;
+        display: inline-block;
+      }
+
+      /* ---------- Diagram ---------- */
+
+      .diagram {
+        position: relative;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        padding: 1.75rem 1.75rem 1.5rem;
+        overflow: hidden;
+      }
+
+      .diagram svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 0;
+        pointer-events: none;
+      }
+
+      .lane {
+        position: relative;
+        z-index: 1;
+        margin-bottom: 1.9rem;
+      }
+
+      .lane:last-child {
+        margin-bottom: 0;
+      }
+
+      .lane-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-dim);
+        margin-bottom: 0.65rem;
+      }
+
+      .lane-label .dot {
+        width: 0.55rem;
+        height: 0.55rem;
+        border-radius: 999px;
+      }
+
+      .lane-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+        gap: 0.9rem;
+      }
+
+      .node {
+        position: relative;
+        background: var(--panel);
+        border: 1.5px solid var(--border-strong);
+        border-radius: var(--radius-sm);
+        padding: 0.75rem 0.8rem 0.65rem;
+        cursor: pointer;
+        text-align: left;
+        font: inherit;
+        color: inherit;
+        transition:
+          transform 0.12s ease,
+          box-shadow 0.12s ease,
+          border-color 0.12s ease;
+      }
+
+      .node:hover,
+      .node:focus-visible {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.1);
+        outline: none;
+      }
+
+      .node[data-lane='devices'] {
+        border-top: 3px solid var(--devices);
+      }
+      .node[data-lane='hub'] {
+        border-top: 3px solid var(--hub);
+      }
+      .node[data-lane='cloud'] {
+        border-top: 3px solid var(--cloud);
+      }
+      .node[data-lane='shared'] {
+        border-top: 3px solid var(--shared);
+      }
+
+      .node-icon {
+        font-size: 1.3rem;
+        display: block;
+        margin-bottom: 0.3rem;
+      }
+
+      .node-title {
+        font-weight: 700;
+        font-size: 0.88rem;
+        margin-bottom: 0.25rem;
+        display: block;
+      }
+
+      .node-summary {
+        font-size: 0.74rem;
+        color: var(--text-dim);
+        display: block;
+        margin-bottom: 0.5rem;
+      }
+
+      .node-detail-btn {
+        font-size: 0.68rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: var(--accent);
+        background: var(--accent-soft);
+        border: none;
+        border-radius: 999px;
+        padding: 0.25rem 0.6rem;
+        pointer-events: none;
+      }
+
+      .node-usedby {
+        margin-top: 0.5rem;
+        font-size: 0.68rem;
+        color: var(--text-faint);
+      }
+
+      /* ---------- Shared blocks ---------- */
+
+      .shared-section {
+        margin-top: 2rem;
+      }
+
+      .shared-section .section-heading {
+        font-size: 1rem;
+        font-weight: 700;
+        margin-bottom: 0.25rem;
+      }
+
+      .shared-section .section-hint {
+        color: var(--text-dim);
+        font-size: 0.85rem;
+        margin: 0 0 1rem;
+        max-width: 70ch;
+      }
+
+      /* ---------- Detail panel ---------- */
+
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.35);
+        z-index: 10;
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      .backdrop[hidden] {
+        display: none;
+      }
+
+      .panel {
+        width: min(30rem, 92vw);
+        height: 100%;
+        background: var(--panel);
+        box-shadow: -12px 0 32px rgba(15, 23, 42, 0.18);
+        padding: 1.75rem;
+        overflow-y: auto;
+        animation: slide-in 0.18s ease;
+      }
+
+      @keyframes slide-in {
+        from {
+          transform: translateX(2rem);
+          opacity: 0;
+        }
+        to {
+          transform: translateX(0);
+          opacity: 1;
+        }
+      }
+
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 1rem;
+        margin-bottom: 0.25rem;
+      }
+
+      .panel-header h2 {
+        margin: 0;
+        font-size: 1.25rem;
+      }
+
+      .panel-icon {
+        font-size: 1.6rem;
+      }
+
+      .panel-close {
+        border: none;
+        background: var(--panel-2);
+        color: var(--text-dim);
+        width: 2rem;
+        height: 2rem;
+        border-radius: 999px;
+        font-size: 1rem;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+
+      .panel-close:hover {
+        background: var(--border);
+      }
+
+      .panel-summary {
+        color: var(--text-dim);
+        margin: 0.5rem 0 1.5rem;
+      }
+
+      .panel h3 {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-faint);
+        margin: 1.3rem 0 0.4rem;
+      }
+
+      .panel h3:first-of-type {
+        margin-top: 0;
+      }
+
+      .panel p {
+        margin: 0;
+        font-size: 0.92rem;
+      }
+
+      .panel .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+      }
+
+      .panel .pill {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 0.2rem 0.65rem;
+        font-size: 0.78rem;
+        color: var(--text-dim);
+      }
+
+      footer {
+        margin-top: 3rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--border);
+        color: var(--text-faint);
+        font-size: 0.8rem;
+      }
+
+      @media (max-width: 640px) {
+        .lane-row {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="page-header">
+        <h1>Courtside Scoreboard — Architecture</h1>
+        <p>
+          A LAN-first badminton scoring system: one server on one machine runs a whole tournament
+          with no internet required, with optional internet delivery (live video + a public
+          scoreboard) layered on top. Click any box below for how it's built, what it depends on,
+          and what's tricky about it.
+        </p>
+        <nav class="top-links">
+          <a href="../README.md">README</a>
+          <a href="HANDOFF.md">HANDOFF.md — full history</a>
+          <a href="STREAMING_UPGRADE.md">STREAMING_UPGRADE.md — video &amp; internet delivery</a>
+          <a href="umpire-screen-spec.md">Umpire screen spec</a>
+        </nav>
+      </header>
+
+      <section class="legend">
+        <span class="legend-item"><span class="legend-line"></span> data / signalling</span>
+        <span class="legend-item"
+          ><span class="legend-line dashed"></span> peer-to-peer media (WebRTC)</span
+        >
+        <span class="legend-item"
+          ><span class="legend-swatch" style="background: #0891b2"></span> devices</span
+        >
+        <span class="legend-item"
+          ><span class="legend-swatch" style="background: #7c3aed"></span> LAN hub (one
+          machine)</span
+        >
+        <span class="legend-item"
+          ><span class="legend-swatch" style="background: #d97706"></span> cloud (optional)</span
+        >
+      </section>
+
+      <div class="diagram" id="diagram">
+        <svg id="connector-svg" aria-hidden="true"></svg>
+
+        <div class="lane" id="lane-devices">
+          <div class="lane-label">
+            <span class="dot" style="background: #0891b2"></span>Devices on the LAN
+          </div>
+          <div class="lane-row">
+            <button
+              class="node"
+              data-lane="devices"
+              data-node="admin-dashboard"
+              id="node-admin-dashboard"
+            >
+              <span class="node-icon">🖥️</span>
+              <span class="node-title">Admin Dashboard</span>
+              <span class="node-summary">Runs the tournament — courts, umpires, matches.</span>
+              <span class="node-detail-btn">Details</span>
+            </button>
+            <button
+              class="node"
+              data-lane="devices"
+              data-node="umpire-device"
+              id="node-umpire-device"
+            >
+              <span class="node-icon">📱</span>
+              <span class="node-title">Umpire Device</span>
+              <span class="node-summary">Scores the match from a court-diagram UI.</span>
+              <span class="node-detail-btn">Details</span>
+            </button>
+            <button class="node" data-lane="devices" data-node="tv-screen" id="node-tv-screen">
+              <span class="node-icon">📺</span>
+              <span class="node-title">TV Screen</span>
+              <span class="node-summary">Live score only, built for across a room.</span>
+              <span class="node-detail-btn">Details</span>
+            </button>
+            <button
+              class="node"
+              data-lane="devices"
+              data-node="court-broadcaster"
+              id="node-court-broadcaster"
+            >
+              <span class="node-icon">📷</span>
+              <span class="node-title">Court-side Phone</span>
+              <span class="node-summary">Films the match for remote viewers.</span>
+              <span class="node-detail-btn">Details</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="lane" id="lane-hub">
+          <div class="lane-label">
+            <span class="dot" style="background: #7c3aed"></span>The LAN hub — one machine, no
+            internet required
+          </div>
+          <div class="lane-row">
+            <button class="node" data-lane="hub" data-node="desktop-app" id="node-desktop-app">
+              <span class="node-icon">💻</span>
+              <span class="node-title">Electron Desktop App</span>
+              <span class="node-summary">Double-click launcher, no terminal.</span>
+              <span class="node-detail-btn">Details</span>
+            </button>
+            <button class="node" data-lane="hub" data-node="server" id="node-server">
+              <span class="node-icon">🗄️</span>
+              <span class="node-title">Server</span>
+              <span class="node-summary"
+                >Express + Socket.io — the one process every device talks to.</span
+              >
+              <span class="node-detail-btn">Details</span>
+            </button>
+            <button class="node" data-lane="hub" data-node="sqlite" id="node-sqlite">
+              <span class="node-icon">🗃️</span>
+              <span class="node-title">SQLite (Prisma)</span>
+              <span class="node-summary">One embedded file, event-sourced match history.</span>
+              <span class="node-detail-btn">Details</span>
+            </button>
+            <button class="node" data-lane="hub" data-node="mdns" id="node-mdns">
+              <span class="node-icon">📡</span>
+              <span class="node-title">mDNS — courtside.local</span>
+              <span class="node-summary">A name that survives the router reassigning an IP.</span>
+              <span class="node-detail-btn">Details</span>
+            </button>
+            <button class="node" data-lane="hub" data-node="local-ca" id="node-local-ca">
+              <span class="node-icon">🔐</span>
+              <span class="node-title">Persistent Local CA + TLS</span>
+              <span class="node-summary"
+                >A one-time camera-trust warning instead of every restart.</span
+              >
+              <span class="node-detail-btn">Details</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="lane" id="lane-cloud">
+          <div class="lane-label">
+            <span class="dot" style="background: #d97706"></span>Cloud — optional, additive only
+          </div>
+          <div class="lane-row">
+            <button class="node" data-lane="cloud" data-node="firestore" id="node-firestore">
+              <span class="node-icon">☁️</span>
+              <span class="node-title">Firebase Firestore</span>
+              <span class="node-summary">Mirrors the score, carries WebRTC signalling.</span>
+              <span class="node-detail-btn">Details</span>
+            </button>
+            <button
+              class="node"
+              data-lane="cloud"
+              data-node="public-viewer"
+              id="node-public-viewer"
+            >
+              <span class="node-icon">🌐</span>
+              <span class="node-title">Public Viewer</span>
+              <span class="node-summary">The link anyone on the internet can open.</span>
+              <span class="node-detail-btn">Details</span>
+            </button>
+            <button class="node" data-lane="cloud" data-node="turn" id="node-turn">
+              <span class="node-icon">🔁</span>
+              <span class="node-title">Cloudflare TURN</span>
+              <span class="node-summary">Relay of last resort for a blocked internet viewer.</span>
+              <span class="node-detail-btn">Details</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="shared-section">
+        <div class="section-heading">Shared building blocks</div>
+        <p class="section-hint">
+          Not part of the data-flow diagram above — these are code, not services, used by several of
+          the pieces above at once. Click one for the same detail.
+        </p>
+        <div class="lane-row">
+          <button class="node" data-lane="shared" data-node="shared-engine" id="node-shared-engine">
+            <span class="node-icon">⚙️</span>
+            <span class="node-title">Shared Scoring Engine</span>
+            <span class="node-summary">The rules of badminton, implemented exactly once.</span>
+            <span class="node-usedby">Used by: Server, Admin, Umpire</span>
+            <span class="node-detail-btn">Details</span>
+          </button>
+          <button class="node" data-lane="shared" data-node="admin-i18n" id="node-admin-i18n">
+            <span class="node-icon">🌍</span>
+            <span class="node-title">Admin i18n (EN/ES)</span>
+            <span class="node-summary">Only the admin dashboard is bilingual.</span>
+            <span class="node-usedby">Used by: Admin Dashboard</span>
+            <span class="node-detail-btn">Details</span>
+          </button>
+          <button class="node" data-lane="shared" data-node="admin-theme" id="node-admin-theme">
+            <span class="node-icon">🎨</span>
+            <span class="node-title">Admin Theme (Light/Dark)</span>
+            <span class="node-summary">Only the admin dashboard can go light.</span>
+            <span class="node-usedby">Used by: Admin Dashboard</span>
+            <span class="node-detail-btn">Details</span>
+          </button>
+        </div>
+      </div>
+
+      <footer>
+        Courtside Scoreboard — this page is a hand-built static file
+        (<code>docs/architecture.html</code>), no build step, no framework, no external scripts. See
+        <a href="HANDOFF.md">HANDOFF.md</a> for the full narrative history this was summarised from.
+      </footer>
+    </main>
+
+    <div class="backdrop" id="backdrop" hidden>
+      <aside class="panel" id="panel" role="dialog" aria-modal="true" aria-labelledby="panel-title">
+        <div class="panel-header">
+          <div>
+            <span class="panel-icon" id="panel-icon"></span>
+            <h2 id="panel-title" style="display: inline"></h2>
+          </div>
+          <button class="panel-close" id="panel-close" aria-label="Close">✕</button>
+        </div>
+        <p class="panel-summary" id="panel-summary"></p>
+
+        <h3>Implementation</h3>
+        <p id="panel-implementation"></p>
+
+        <h3>Libraries &amp; tech</h3>
+        <div class="pill-row" id="panel-libs"></div>
+
+        <h3>Special considerations</h3>
+        <p id="panel-considerations"></p>
+      </aside>
+    </div>
+
+    <script>
+      const NODES = {
+        'admin-dashboard': {
+          icon: '🖥️',
+          title: 'Admin Dashboard',
+          summary:
+            'Where a tournament is run from — create courts, umpires and matches, watch history.',
+          implementation:
+            'A React single-page route (/admin) served as a static bundle by the same server it talks to. Polls REST endpoints (matches/courts/umpires) every 5 seconds and drives match creation, CSV roster import, and per-court links (TV, public score, camera broadcast) via plain fetch() calls, all guarded by a shared admin-password header.',
+          libs: [
+            'React 18',
+            'react-router-dom',
+            'Vite + @vitejs/plugin-legacy',
+            'qrcode.react',
+            'hand-rolled i18n',
+            'hand-rolled theme toggle',
+          ],
+          considerations:
+            'Never shows a password prompt — it reads the admin password from a URL query param the desktop launcher hands off, or a fixed change-me default. The only screen with English/Spanish and light/dark support; every other screen is intentionally out of that scope.',
+        },
+        'umpire-device': {
+          icon: '📱',
+          title: 'Umpire Device',
+          summary:
+            'A phone or tablet the umpire scores the match from — a visual court diagram, not a plain scoreboard.',
+          implementation:
+            'A route (/umpire/:matchId?token=...) authorized by a long random umpireToken handed out once at match creation. Every action (point, undo, retire, start set) emits a Socket.io event; the server validates and replays it through the shared event-sourced scoring engine before broadcasting the derived state back to every subscriber.',
+          libs: ['React', 'socket.io-client', 'idb (IndexedDB offline queue)'],
+          considerations:
+            "Modelled on official umpire apps (see the umpire screen spec), not a plain scoreboard — doubles serve rotation and court-position setup live here. Offline-queued actions replay safely because every event carries an idempotent eventId, so a retried point after a dropped connection can't double-count.",
+        },
+        'tv-screen': {
+          icon: '📺',
+          title: 'TV Screen',
+          summary: 'The big screen at courtside — live score only, built for a room, not a desk.',
+          implementation:
+            "A route (/tv/court/:courtId, or a short join code at /tv with no id) that subscribes to one court's live match over Socket.io and renders the current score full-screen.",
+          libs: ['React', 'socket.io-client'],
+          considerations:
+            "Built without CSS Grid subgrid on purpose — older smart TV browsers (e.g. LG webOS's bundled Chromium) don't support it, so every row duplicates an identical column template instead of relying on it. The one screen most likely to run on genuinely old hardware, so it's also the reason the client ships a legacy browser build at all.",
+        },
+        'court-broadcaster': {
+          icon: '📷',
+          title: 'Court-side Phone (Broadcaster)',
+          summary: 'An extra phone propped up at the court, filming the match for remote viewers.',
+          implementation:
+            'A route (/stream/court/:courtId) that owns getUserMedia() and negotiates a mesh WebRTC connection over two independent signalling paths at once — Socket.io for viewers on the LAN, Firestore documents for viewers on the internet. Starts and stops itself automatically as the umpire starts or finalises the match, once camera permission has been granted on that phone at least once.',
+          libs: [
+            'Native WebRTC APIs',
+            'socket.io-client',
+            'Firebase SDK (Firestore, for the internet signalling path)',
+          ],
+          considerations:
+            'Needs a secure context (HTTPS) to access the camera — the one reason this server runs a second HTTPS listener at all. A phone that has never granted permission just stays idle when a match auto-starts; nothing breaks, it simply still needs one manual tap the first time.',
+        },
+        server: {
+          icon: '🗄️',
+          title: 'Server — Express + Socket.io',
+          summary:
+            'The one process every device on the LAN talks to — REST API, real-time sync, and the built client, all in one.',
+          implementation:
+            "Express serves the REST API and the built client's static files (any unmatched route falls back to index.html, so a deep link survives a hard refresh); Socket.io runs alongside it for scoring, TV subscriptions, and WebRTC signalling relay. Two listeners run side by side: a plain HTTP one (port 3000) and a second, dedicated HTTPS one that exists only so the camera-capture page has the secure context it needs.",
+          libs: [
+            'express',
+            'socket.io',
+            'cors',
+            'prisma',
+            'bonjour-service',
+            'firebase-admin (optional)',
+          ],
+          considerations:
+            'CORS is wide open on purpose — this is a LAN-only deployment, not a public API, and tunnelling this port to the internet is explicitly unsupported. Admin-mutating routes require a shared password header; umpire actions are instead authorized per-match by their own token, since an umpire never has (or needs) the admin password.',
+        },
+        sqlite: {
+          icon: '🗃️',
+          title: 'SQLite (via Prisma)',
+          summary:
+            'One embedded database file — the single source of truth for every match, no server to install.',
+          implementation:
+            'Prisma models Tournament / Court / Umpire / Match / Player / ScoreEvent / TournamentPlayer. Match state is event-sourced: every point, undo and retirement is an append-only ScoreEvent row, replayed to derive the current score rather than storing one mutable scoreboard row that could drift from the log that produced it.',
+          libs: ['Prisma Client', 'SQLite'],
+          considerations:
+            'A dedicated routine applies additive-only schema upgrades (new columns, new tables) to an existing database file in place — never a destructive migration — so an older install never loses its match history just because the app updated underneath it.',
+        },
+        'desktop-app': {
+          icon: '💻',
+          title: 'Electron Desktop App',
+          summary: 'The double-click app a non-technical admin runs — no terminal, no npm install.',
+          implementation:
+            'Electron\'s main process spawns the exact same server code as a child process (via its own bundled Node runtime + tsx), and shows a small launcher window with the resolved network address, a tournament picker, and an "Open Admin Dashboard" button that opens the system browser at that address.',
+          libs: ['Electron', 'electron-builder', 'tsx'],
+          considerations:
+            'Resolves courtside.local preferentially over the LAN IP — probed for real, with retries, since the server logs "listening" before it even publishes mDNS, and the OS\'s own resolver needs a further moment beyond that. A packaged build replaces the server\'s node_modules with a production-only tree, so dev tooling (Jest, the Prisma CLI, TypeScript) never ships in the installer.',
+        },
+        mdns: {
+          icon: '📡',
+          title: 'mDNS — courtside.local',
+          summary:
+            'A stable name for this machine on the LAN, so links survive the router handing out a new IP.',
+          implementation:
+            "bonjour-service advertises courtside.local on the local network. Every link the app builds — TV, umpire, camera broadcast, even the admin dashboard's own address — follows whatever the desktop launcher resolved this to, since each is derived from the browser's own window.location.origin at the moment it was opened.",
+          libs: ['bonjour-service'],
+          considerations:
+            "Not universal: native on iPhone, only Android 13+, and Windows needs Apple's Bonjour service installed separately. MDNS_ENABLED=false turns it off entirely for a venue that blocks multicast — every device just falls back to a plain LAN IP link, exactly as it worked before this existed.",
+        },
+        'local-ca': {
+          icon: '🔐',
+          title: 'Persistent Local CA + TLS',
+          summary:
+            "A private certificate authority this server signs itself, so the camera's HTTPS warning is a one-time thing.",
+          implementation:
+            "A certificate authority generated once and persisted to disk signs a long-lived leaf certificate whose SAN list covers localhost, 127.0.0.1, courtside.local, and every LAN IP the machine had at first boot. A plain-HTTP route serves just the CA's public certificate (never its private key) behind a QR code, so a phone can install and trust it once.",
+          libs: ["Node's crypto / selfsigned"],
+          considerations:
+            "Reachable over plain HTTP on purpose — it can't itself require a trust the phone doesn't have yet. This replaced generating a fresh self-signed certificate on every server restart, which made the browser's warning reappear even on an already-trusted phone every single time.",
+        },
+        firestore: {
+          icon: '☁️',
+          title: 'Firebase Firestore',
+          summary:
+            'Mirrors the live score to the internet, and carries WebRTC signalling for internet viewers.',
+          implementation:
+            "The server mirrors every score change to a matches/{courtId} document through an explicit allow-list function — never a raw copy of the match record — so a secret like the umpire's write token can never leak onto a world-readable document just because a new field was added later and forgotten. The broadcaster and internet viewers also exchange WebRTC offers/answers as Firestore documents when Socket.io isn't reachable between them.",
+          libs: ['firebase-admin (server)', 'Firebase JS SDK (client, public-viewer)'],
+          considerations:
+            'Firestore rules deny all public writes outright; the server writes via the Admin SDK, which bypasses rules entirely, so closing client writes costs the app nothing. The WebRTC signalling documents are world-writable by design — two anonymous peers need to be able to find each other — a known, accepted trade-off rather than an oversight.',
+        },
+        'public-viewer': {
+          icon: '🌐',
+          title: 'Public Viewer (Firebase Hosting)',
+          summary: 'The link anyone in the world can open to watch a match — no app, no login.',
+          implementation:
+            'A plain static HTML/JS page — no build step, no framework — deployed to Firebase Hosting. Reads the live score straight from Firestore and negotiates video the same mesh-WebRTC way a LAN viewer does, just over Firestore signalling instead of Socket.io.',
+          libs: ['Firebase JS SDK, loaded directly'],
+          considerations:
+            'Capped at roughly 5 concurrent viewers by the mesh model itself (one peer connection per viewer, all from the same court-side phone) — a real ceiling, not a bug to fix. Auto-reconnects on a dropped connection instead of ever needing a manual page reload.',
+        },
+        turn: {
+          icon: '🔁',
+          title: 'Cloudflare TURN',
+          summary:
+            'A relay of last resort for an internet viewer whose network blocks a direct peer connection.',
+          implementation:
+            'The server mints short-lived TURN credentials on demand from a dedicated route, so a browser never holds a long-lived secret — the underlying Cloudflare API token never leaves the server.',
+          libs: ["Cloudflare's Realtime TURN service"],
+          considerations:
+            'Most free public STUN/TURN servers people reach for by default turned out to be dead — verified directly before committing to this one. The route always answers 200, even when unconfigured; an empty server list just means the client falls back to plain STUN, so a missing optional feature never looks like a broken endpoint.',
+        },
+        'shared-engine': {
+          icon: '⚙️',
+          title: 'Shared Scoring Engine',
+          summary:
+            'The rules of badminton itself — one implementation, used by both the server and every client screen.',
+          implementation:
+            'Framework-free TypeScript in packages/shared: the state machine that turns a log of point/undo/retire events into a derived score, the Socket.io event contract (one set of shared types for every event either side emits), and CSV parsing plus eligibility validation for an imported tournament roster.',
+          libs: ['None beyond TypeScript itself'],
+          considerations:
+            "Exists specifically to prevent the bug class where the server and a client disagree about who is serving or who just won. Roster eligibility validation only checks whatever data is actually present — a manually-typed player with no roster entry just skips every check that needs data it doesn't have, rather than failing outright.",
+        },
+        'admin-i18n': {
+          icon: '🌍',
+          title: 'Admin i18n (English/Spanish)',
+          summary: 'The admin dashboard speaks English or Spanish — nowhere else in the app does.',
+          implementation:
+            "A hand-rolled locale detector (navigator.languages, matched against what's supported, English as the fallback) and a dictionary lookup, shared across every admin component through useSyncExternalStore over one localStorage-backed value — no Context provider needed for two components to agree on the current language.",
+          libs: ["None — no i18next; two languages on one screen didn't justify it"],
+          considerations:
+            "An explicit pick from the header's language dropdown persists and overrides browser detection on every future load. Every dictionary key is checked by a test that fails if the two languages' key sets, or their {{placeholder}} variables, ever drift apart from each other.",
+        },
+        'admin-theme': {
+          icon: '🎨',
+          title: 'Admin Theme (Light/Dark)',
+          summary: "Light or dark, admin's choice — every other screen stays dark, always.",
+          implementation:
+            "The same shared-hook pattern as i18n. The chosen theme is written onto document.body as a data-theme attribute only while the admin dashboard is mounted, and removed again on unmount — so it can never leak into the TV or umpire screen opened afterwards in the same browser tab. A single body[data-theme='light'] rule overrides the entire colour-variable palette from there.",
+          libs: ['None'],
+          considerations:
+            "Defaults to dark, not the OS preference — a deliberate product decision, unlike the language picker's browser-default behaviour. Every surface colour has to actually be a variable for this to work at all; two places that instead had a colour hardcoded were the real bug fixed the first time this shipped.",
+        },
+      };
+
+      const CONNECTIONS = [
+        ['node-admin-dashboard', 'node-server', false],
+        ['node-umpire-device', 'node-server', false],
+        ['node-tv-screen', 'node-server', false],
+        ['node-court-broadcaster', 'node-server', false],
+        ['node-desktop-app', 'node-server', false],
+        ['node-server', 'node-sqlite', false],
+        ['node-desktop-app', 'node-mdns', false],
+        ['node-server', 'node-mdns', false],
+        ['node-server', 'node-local-ca', false],
+        ['node-server', 'node-firestore', false],
+        ['node-court-broadcaster', 'node-firestore', false],
+        ['node-public-viewer', 'node-firestore', false],
+        ['node-public-viewer', 'node-turn', false],
+        ['node-court-broadcaster', 'node-tv-screen', true],
+        ['node-court-broadcaster', 'node-public-viewer', true],
+      ];
+
+      function drawConnections() {
+        const svg = document.getElementById('connector-svg');
+        const diagram = document.getElementById('diagram');
+        const rect = diagram.getBoundingClientRect();
+        svg.innerHTML = '';
+        svg.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
+
+        CONNECTIONS.forEach(([fromId, toId, dashed]) => {
+          const fromEl = document.getElementById(fromId);
+          const toEl = document.getElementById(toId);
+          if (!fromEl || !toEl) return;
+          const fromRect = fromEl.getBoundingClientRect();
+          const toRect = toEl.getBoundingClientRect();
+          const x1 = fromRect.left + fromRect.width / 2 - rect.left;
+          const y1 = fromRect.top + fromRect.height / 2 - rect.top;
+          const x2 = toRect.left + toRect.width / 2 - rect.left;
+          const y2 = toRect.top + toRect.height / 2 - rect.top;
+          const midY = (y1 + y2) / 2;
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute(
+            'd',
+            Math.abs(y1 - y2) > 4
+              ? `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`
+              : `M ${x1} ${y1} L ${x2} ${y2}`,
+          );
+          path.setAttribute('stroke', dashed ? '#94a3b8' : '#67e8f9');
+          path.setAttribute('stroke-width', '2');
+          path.setAttribute('fill', 'none');
+          if (dashed) path.setAttribute('stroke-dasharray', '6,5');
+          svg.appendChild(path);
+        });
+      }
+
+      const backdrop = document.getElementById('backdrop');
+      const panel = document.getElementById('panel');
+
+      function openPanel(nodeId) {
+        const data = NODES[nodeId];
+        if (!data) return;
+        document.getElementById('panel-icon').textContent = data.icon;
+        document.getElementById('panel-title').textContent = data.title;
+        document.getElementById('panel-summary').textContent = data.summary;
+        document.getElementById('panel-implementation').textContent = data.implementation;
+        document.getElementById('panel-considerations').textContent = data.considerations;
+        const libsEl = document.getElementById('panel-libs');
+        libsEl.innerHTML = '';
+        data.libs.forEach((lib) => {
+          const span = document.createElement('span');
+          span.className = 'pill';
+          span.textContent = lib;
+          libsEl.appendChild(span);
+        });
+        backdrop.hidden = false;
+      }
+
+      function closePanel() {
+        backdrop.hidden = true;
+      }
+
+      document.querySelectorAll('.node').forEach((node) => {
+        node.addEventListener('click', () => openPanel(node.dataset.node));
+      });
+      document.getElementById('panel-close').addEventListener('click', closePanel);
+      backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) closePanel();
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closePanel();
+      });
+
+      window.addEventListener('resize', drawConnections);
+      window.addEventListener('load', drawConnections);
+      drawConnections();
+    </script>
+  </body>
+</html>

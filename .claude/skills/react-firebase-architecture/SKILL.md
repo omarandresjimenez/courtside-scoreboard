@@ -42,7 +42,7 @@ Every configuration script must validate the presence of required environment va
 This project uses Firebase for the public scoreboard and for WebRTC signalling.
 Most of the above already holds; the exceptions below are deliberate, and each
 was learned the expensive way. Full record in
-[STREAMING_UPGRADE.md](../../../STREAMING_UPGRADE.md).
+[STREAMING_UPGRADE.md](../../../docs/STREAMING_UPGRADE.md).
 
 ### The client Firebase config is intentionally NOT in environment variables
 

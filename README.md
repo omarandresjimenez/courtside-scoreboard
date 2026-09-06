@@ -12,14 +12,15 @@ the app behaves exactly as described above. Camera capture needs a secure
 connection, so the first phone to open the broadcast link sees a one-time
 security-certificate prompt; installing it (a QR code and short instructions
 are right on the admin dashboard) means that phone never sees it again, even
-across restarts — see STREAMING_UPGRADE.md section 7.6. The broadcast link is
+across restarts — see docs/STREAMING_UPGRADE.md section 7.6. The broadcast link is
 one stable address per court (found on that court's row in the admin
 dashboard, not regenerated per match), and once a phone has granted camera
 permission once, it starts and stops transmitting on its own as each match on
-that court starts and finishes — see STREAMING_UPGRADE.md section 9.4. See
-[STREAMING_UPGRADE.md](STREAMING_UPGRADE.md) for how that works and what it
-needs; [HANDOFF.md](HANDOFF.md) is the "how it actually works and why" doc for
-everything else.
+that court starts and finishes — see docs/STREAMING_UPGRADE.md section 9.4. See
+[docs/STREAMING_UPGRADE.md](docs/STREAMING_UPGRADE.md) for how that works and what it
+needs; [docs/HANDOFF.md](docs/HANDOFF.md) is the "how it actually works and why" doc
+for everything else, and [docs/architecture.html](docs/architecture.html) is a
+visual tour of how every piece fits together.
 
 The full design spec (architecture, scoring rules, screens, data model,
 event contract) lives in the private working doc this project was
@@ -82,7 +83,7 @@ resolves after a hard refresh. This means umpire and TV devices only ever
 need one address — `http://courtside.local:3000` where the network
 supports mDNS (the desktop launcher prefers this and probes it before
 using it, falling back to `http://<server's LAN IP>:3000` otherwise; see
-HANDOFF.md). `start` runs the server through `tsx` rather than a `tsc`
+`docs/HANDOFF.md`). `start` runs the server through `tsx` rather than a `tsc`
 build, since `@courtside/shared` is consumed as TypeScript source and
 `tsx` resolves that transparently at both dev and run time — there's
 nothing extra to compile for the server itself.
@@ -216,7 +217,7 @@ real-time score sync over Socket.io. The umpire screen is a visual court
 diagram modeled on official umpire apps — see
 `docs/umpire-screen-spec.md` for the reference behaviour it follows. The
 TV screen scales to the actual display and is built without CSS Grid
-`subgrid`, which most smart TV browsers don't support (see HANDOFF.md).
+`subgrid`, which most smart TV browsers don't support (see `docs/HANDOFF.md`).
 
 A tournament's player list can be imported from a CSV export (MemberID,
 FirstName, LastName, Gender, Country, Club, BirthDate, Category, Status)

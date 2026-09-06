@@ -9,7 +9,7 @@ export const turnRouter = Router();
  * Unauthenticated on purpose: the broadcaster page is opened from a QR code by
  * whoever is running the court, with no login to hang auth off. That is
  * acceptable because this server is LAN-only (see the warning in
- * STREAMING_UPGRADE.md against tunnelling port 3000 to the internet), the
+ * docs/STREAMING_UPGRADE.md against tunnelling port 3000 to the internet), the
  * credentials it hands out expire, and the underlying TURN key never leaves
  * the server.
  *
