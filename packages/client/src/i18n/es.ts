@@ -126,6 +126,26 @@ const es = {
     submitCreate: 'Crear partido',
     pickEveryPlayer: 'Elige cada jugador de la lista antes de crear el partido.',
     createFailed: 'Error al crear el partido.',
+    /* Elegibilidad — las comprobaciones de la lista en shared/players.ts.
+       Indexado por los códigos que devuelve, porque el servidor no puede
+       saber el idioma del administrador y por tanto no puede escribir
+       estas frases. */
+    eligibility: {
+      categoryNeedsSingles:
+        'La categoría «{{category}}» es de individuales, pero este partido está configurado como dobles.',
+      categoryNeedsDoubles:
+        'La categoría «{{category}}» es de dobles, pero este partido está configurado como individuales.',
+      notRegistered:
+        'Un jugador del lado {{side}} no está inscrito en la categoría «{{category}}».',
+      genderNotAcceptedMale:
+        'La categoría «{{category}}» no admite jugadores masculinos (lado {{side}}).',
+      genderNotAcceptedFemale:
+        'La categoría «{{category}}» no admite jugadoras femeninas (lado {{side}}).',
+      tooOld:
+        'Un jugador del lado {{side}} supera la edad de la categoría «{{category}}» (Sub-{{ageLimit}}).',
+      mixedDoublesSide:
+        'Los dobles mixtos necesitan un jugador y una jugadora en el lado {{side}}.',
+    },
     created: 'Partido creado.',
     umpireAccessIntro: 'Acceso del árbitro — entrégaselo solo al árbitro, no se volverá a mostrar:',
     assignedCourt: 'Cancha asignada:',

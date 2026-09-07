@@ -214,7 +214,14 @@ matchesRouter.post(
       tournament.date,
     );
     if (eligibilityIssues.length > 0) {
-      res.status(400).json({ error: eligibilityIssues.map((issue) => issue.message).join(' ') });
+      // Both shapes on purpose. `error` keeps the endpoint readable to any
+      // caller (and to a log), while `issues` carries the codes the admin
+      // dashboard translates — this server has no idea what language the
+      // browser is in, so it cannot produce the text the admin should see.
+      res.status(400).json({
+        error: eligibilityIssues.map((issue) => issue.message).join(' '),
+        issues: eligibilityIssues,
+      });
       return;
     }
 

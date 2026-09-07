@@ -134,11 +134,19 @@ describe('parseCategoryCode', () => {
   });
 
   it('handles a bare discipline code with no age', () => {
-    expect(parseCategoryCode('XD')).toEqual({ genderCode: 'X', disciplineCode: 'D', ageLimit: null });
+    expect(parseCategoryCode('XD')).toEqual({
+      genderCode: 'X',
+      disciplineCode: 'D',
+      ageLimit: null,
+    });
   });
 
   it('handles a missing category', () => {
-    expect(parseCategoryCode(null)).toEqual({ genderCode: null, disciplineCode: null, ageLimit: null });
+    expect(parseCategoryCode(null)).toEqual({
+      genderCode: null,
+      disciplineCode: null,
+      ageLimit: null,
+    });
     expect(parseCategoryCode(undefined)).toEqual({
       genderCode: null,
       disciplineCode: null,
@@ -151,26 +159,32 @@ describe('validateMatchEligibility', () => {
   const male: EligibilityPlayer = { side: 'A', gender: 'M', categories: 'MS/MD' };
   const female: EligibilityPlayer = { side: 'B', gender: 'F', categories: 'WS/WD' };
 
-  it('passes a men\'s singles match with two male players', () => {
+  it("passes a men's singles match with two male players", () => {
     const opponent: EligibilityPlayer = { side: 'B', gender: 'M', categories: 'MS/MD' };
     expect(validateMatchEligibility('singles', 'MS', [male, opponent])).toEqual([]);
   });
 
-  it('rejects a female player in a men\'s singles category', () => {
+  it("rejects a female player in a men's singles category", () => {
     const issues = validateMatchEligibility('singles', 'MS', [male, female]);
     expect(issues).toContainEqual(
-      expect.objectContaining({ side: 'B', message: expect.stringContaining('does not accept a female') }),
+      expect.objectContaining({
+        side: 'B',
+        message: expect.stringContaining('does not accept a female'),
+      }),
     );
   });
 
-  it('rejects a male player in a women\'s singles category', () => {
+  it("rejects a male player in a women's singles category", () => {
     const issues = validateMatchEligibility('singles', 'WS', [male, female]);
     expect(issues).toContainEqual(
-      expect.objectContaining({ side: 'A', message: expect.stringContaining('does not accept a male') }),
+      expect.objectContaining({
+        side: 'A',
+        message: expect.stringContaining('does not accept a male'),
+      }),
     );
   });
 
-  it('rejects a category not on the player\'s registered list', () => {
+  it("rejects a category not on the player's registered list", () => {
     const issues = validateMatchEligibility('doubles', 'XD', [
       { side: 'A', gender: 'M', categories: 'MS/MD' },
       { side: 'B', gender: 'F', categories: 'WS/WD' },
@@ -211,9 +225,7 @@ describe('validateMatchEligibility', () => {
   });
 
   it('skips every check for a player with no roster data', () => {
-    expect(
-      validateMatchEligibility('singles', 'MS', [{ side: 'A' }, { side: 'B' }]),
-    ).toEqual([]);
+    expect(validateMatchEligibility('singles', 'MS', [{ side: 'A' }, { side: 'B' }])).toEqual([]);
   });
 
   it('returns no issues when no category is set', () => {
@@ -245,5 +257,59 @@ describe('validateMatchEligibility', () => {
       { side: 'B', gender: 'F' },
     ]);
     expect(issues.some((i) => i.side === 'A')).toBe(false);
+  });
+});
+
+describe('eligibility issue codes', () => {
+  const male: EligibilityPlayer = { side: 'A', gender: 'M', categories: 'MS/MD' };
+  const female: EligibilityPlayer = { side: 'B', gender: 'F', categories: 'WS/WD' };
+
+  /** The codes emitted for a line-up, in order. */
+  const codesFor = (...args: Parameters<typeof validateMatchEligibility>) =>
+    validateMatchEligibility(...args).map((issue) => issue.code);
+
+  it('names the discipline the category actually needs, not the one selected', () => {
+    // The admin picked doubles; "MS" is a singles event. Two separate codes
+    // rather than one with a parameter, because the differing word would
+    // otherwise be English interpolated into a Spanish sentence.
+    expect(codesFor('doubles', 'MS', [male, male, female, female])).toContain(
+      'categoryNeedsSingles',
+    );
+    expect(codesFor('singles', 'MD', [male, male])).toContain('categoryNeedsDoubles');
+  });
+
+  it('distinguishes a male from a female player being refused', () => {
+    expect(codesFor('singles', 'MS', [male, female])).toContain('genderNotAcceptedFemale');
+    expect(codesFor('singles', 'WS', [male, female])).toContain('genderNotAcceptedMale');
+  });
+
+  it('carries the values the translated sentence interpolates', () => {
+    const [issue] = validateMatchEligibility(
+      'singles',
+      'WS U15',
+      [{ side: 'A', gender: 'F', birthDate: '2000-01-01', categories: 'WS U15' }],
+      new Date('2026-01-01'),
+    ).filter((i) => i.code === 'tooOld');
+
+    // A missing param renders as a literal "{{ageLimit}}" in the dashboard.
+    expect(issue?.params).toEqual({ side: 'A', category: 'WS U15', ageLimit: 15 });
+  });
+
+  it('still carries an English message for non-browser callers and logs', () => {
+    // Found by code rather than position: this line-up also trips the
+    // "not registered for MS" check, which happens to be reported first.
+    const issues = validateMatchEligibility('singles', 'MS', [male, female]);
+    const gendered = issues.find((issue) => issue.code === 'genderNotAcceptedFemale');
+    expect(gendered?.message).toEqual(expect.stringContaining('does not accept a female'));
+  });
+
+  it('reports each unmixed side of a mixed-doubles match separately', () => {
+    const codes = codesFor('doubles', 'XD', [
+      { side: 'A', gender: 'M', categories: 'XD' },
+      { side: 'A', gender: 'M', categories: 'XD' },
+      { side: 'B', gender: 'F', categories: 'XD' },
+      { side: 'B', gender: 'F', categories: 'XD' },
+    ]);
+    expect(codes.filter((c) => c === 'mixedDoublesSide')).toHaveLength(2);
   });
 });

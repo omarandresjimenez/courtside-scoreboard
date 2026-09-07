@@ -523,6 +523,76 @@ describe('GET /api/matches', () => {
   });
 });
 
+describe('POST /api/matches — eligibility failures carry translatable codes', () => {
+  /**
+   * A roster pair registered for both WS and WD.
+   *
+   * Both codes matter: the tournament must actually carry "WD" or the request
+   * is refused by the earlier "not one of this tournament's categories" check
+   * and never reaches the eligibility stage these tests are about.
+   */
+  const wsPair = () => [
+    {
+      side: 'A',
+      tournamentPlayerId: mockPrisma.seedTournamentPlayer({
+        tournamentId: 'tournament-required',
+        firstName: 'Jane',
+        lastName: 'Roe',
+        gender: 'F',
+        categories: 'WS/WD',
+      }).id,
+    },
+    {
+      side: 'B',
+      tournamentPlayerId: mockPrisma.seedTournamentPlayer({
+        tournamentId: 'tournament-required',
+        firstName: 'Amy',
+        lastName: 'Ng',
+        gender: 'F',
+        categories: 'WS/WD',
+      }).id,
+    },
+  ];
+
+  it('answers with issue codes, not only an English sentence', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({ ...validSinglesBody, category: 'WD', players: wsPair() });
+
+    expect(response.status).toBe(400);
+    // The dashboard is translated and this server has no idea what language
+    // the browser is in, so it cannot write the text the admin should see —
+    // it sends the code and lets the client phrase it.
+    expect(response.body.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'categoryNeedsDoubles' })]),
+    );
+  });
+
+  it('includes the parameters the translated sentence interpolates', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({ ...validSinglesBody, category: 'WD', players: wsPair() });
+
+    const issue = (response.body.issues as Array<{ code: string; params: unknown }>).find(
+      (i) => i.code === 'categoryNeedsDoubles',
+    );
+    // A missing param renders as a literal "{{category}}" in the dashboard.
+    expect(issue?.params).toEqual({ category: 'WD' });
+  });
+
+  it('still sends a readable English error for non-browser callers', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({ ...validSinglesBody, category: 'WD', players: wsPair() });
+
+    expect(typeof response.body.error).toBe('string');
+    expect(response.body.error.length).toBeGreaterThan(0);
+  });
+});
+
 describe('POST /api/matches — roster-backed players', () => {
   it('copies name/lastName from the roster rather than trusting the client', async () => {
     const rosterPlayer = mockPrisma.seedTournamentPlayer({

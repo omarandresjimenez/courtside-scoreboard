@@ -128,6 +128,23 @@ const en = {
     submitCreate: 'Create match',
     pickEveryPlayer: 'Pick every player from the list before creating the match.',
     createFailed: 'Failed to create match.',
+    /* Eligibility — the roster checks in shared/players.ts. Keyed by the
+       issue codes it returns, since the server cannot know the admin's
+       language and so cannot write these sentences itself. */
+    eligibility: {
+      categoryNeedsSingles:
+        'Category “{{category}}” is a singles event, but this match is set up as doubles.',
+      categoryNeedsDoubles:
+        'Category “{{category}}” is a doubles event, but this match is set up as singles.',
+      notRegistered: 'A player on side {{side}} is not registered for category “{{category}}”.',
+      genderNotAcceptedMale:
+        'Category “{{category}}” does not accept a male player (side {{side}}).',
+      genderNotAcceptedFemale:
+        'Category “{{category}}” does not accept a female player (side {{side}}).',
+      tooOld:
+        'A player on side {{side}} is too old for category “{{category}}” (Under {{ageLimit}}).',
+      mixedDoublesSide: 'Mixed doubles needs one male and one female player on side {{side}}.',
+    },
     created: 'Match created.',
     umpireAccessIntro: 'Umpire access — give this only to the umpire, it won’t be shown again:',
     assignedCourt: 'Assigned court:',

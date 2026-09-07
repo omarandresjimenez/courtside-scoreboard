@@ -1550,6 +1550,104 @@ describe('AdminDashboard', () => {
       scrollIntoView.mockRestore();
     });
 
+    it("shows eligibility failures in the admin's language, not the server's English", async () => {
+      render(<AdminDashboard />);
+      await selectCourt();
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
+      mockFetchRoutes({
+        postMatches: jsonResponse(
+          {
+            // The server writes this, and cannot know the browser's language.
+            error: 'Category "MD" is doubles, but this match is set up as singles.',
+            issues: [
+              { code: 'categoryNeedsDoubles', params: { category: 'MD' }, message: 'ignored' },
+            ],
+          },
+          false,
+        ),
+      });
+
+      // Switched only now, so the form helpers above can use the English
+      // labels they were written against.
+      await userEvent.selectOptions(screen.getByLabelText('Language'), 'es');
+      await userEvent.click(screen.getByRole('button', { name: 'Crear partido' }));
+
+      expect(
+        await screen.findByText(
+          'La categoría «MD» es de dobles, pero este partido está configurado como individuales.',
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/is doubles, but this match/)).not.toBeInTheDocument();
+    });
+
+    it('interpolates the side and category into a translated issue', async () => {
+      render(<AdminDashboard />);
+      await selectCourt();
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
+      mockFetchRoutes({
+        postMatches: jsonResponse(
+          {
+            error: 'english',
+            issues: [
+              {
+                code: 'tooOld',
+                side: 'A',
+                params: { side: 'A', category: 'WS U15', ageLimit: 15 },
+              },
+            ],
+          },
+          false,
+        ),
+      });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      expect(
+        await screen.findByText('A player on side A is too old for category “WS U15” (Under 15).'),
+      ).toBeInTheDocument();
+    });
+
+    it('joins several eligibility issues into one message', async () => {
+      render(<AdminDashboard />);
+      await selectCourt();
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
+      mockFetchRoutes({
+        postMatches: jsonResponse(
+          {
+            error: 'english',
+            issues: [
+              { code: 'mixedDoublesSide', side: 'A', params: { side: 'A' } },
+              { code: 'mixedDoublesSide', side: 'B', params: { side: 'B' } },
+            ],
+          },
+          false,
+        ),
+      });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      expect(
+        await screen.findByText(/one male and one female player on side A.*side B/),
+      ).toBeInTheDocument();
+    });
+
+    it('still shows the server error when a failure carries no issue codes', async () => {
+      render(<AdminDashboard />);
+      await selectCourt();
+      await fillPlayer('Side A player 1', 'Alice', 'Adams');
+      await fillPlayer('Side B player 1', 'Bilal', 'Bruno');
+      mockFetchRoutes({
+        postMatches: jsonResponse({ error: 'Court 1 is still in use.' }, false),
+      });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Create match' }));
+
+      expect(await screen.findByText('Court 1 is still in use.')).toBeInTheDocument();
+    });
+
     it('falls back to a generic message when a failed creation has no error field', async () => {
       render(<AdminDashboard />);
       await selectCourt();
@@ -1661,8 +1759,44 @@ describe('AdminDashboard', () => {
 
       const select = screen.getByLabelText('Category') as HTMLSelectElement;
       expect(select.tagName).toBe('SELECT');
+      // Singles is the default match type, so only the singles categories are
+      // on offer — see the doubles case below.
       const optionLabels = Array.from(select.options).map((o) => o.value);
-      expect(optionLabels).toEqual(expect.arrayContaining(['MS', 'MD', 'WS', 'WD']));
+      expect(optionLabels).toEqual(expect.arrayContaining(['MS', 'WS']));
+    });
+
+    it('offers only categories that can be played as the selected match type', async () => {
+      render(<AdminDashboard />);
+      await screen.findByLabelText('Side A player 1');
+
+      const categorySelect = screen.getByLabelText('Category') as HTMLSelectElement;
+      const optionsNow = () => Array.from(categorySelect.options).map((o) => o.value);
+
+      // A doubles category offered while Singles is selected is a line-up the
+      // server rejects on submit — the form should not be able to express it.
+      expect(optionsNow()).not.toContain('MD');
+      expect(optionsNow()).not.toContain('WD');
+
+      await userEvent.selectOptions(screen.getByLabelText('Match type'), 'doubles');
+
+      expect(optionsNow()).toEqual(expect.arrayContaining(['MD', 'WD']));
+      expect(optionsNow()).not.toContain('MS');
+      expect(optionsNow()).not.toContain('WS');
+    });
+
+    it('drops a chosen category that the new match type invalidates', async () => {
+      render(<AdminDashboard />);
+      await screen.findByLabelText('Side A player 1');
+
+      const categorySelect = screen.getByLabelText('Category') as HTMLSelectElement;
+      await userEvent.selectOptions(categorySelect, 'MS');
+      expect(categorySelect.value).toBe('MS');
+
+      await userEvent.selectOptions(screen.getByLabelText('Match type'), 'doubles');
+
+      // Left in place, "MS" would be submitted with a doubles match even though
+      // the select renders blank — its value is no longer among its options.
+      expect(categorySelect.value).toBe('');
     });
 
     it('creates a match from roster-selected players', async () => {

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import {
   SCORING_PRESETS,
+  parseCategoryCode,
   parseCategoryList,
   parseTournamentPlayersCsv,
+  type EligibilityIssue,
   type Court,
   type Match,
   type MatchStatePayload,
@@ -18,6 +20,9 @@ import { QRCodeSVG } from 'qrcode.react';
 import { copyToClipboard } from '../lib/clipboard.js';
 import { PlayerAutocomplete, type PlayerSelection } from '../lib/PlayerAutocomplete.js';
 import { useTranslation, type Translation } from '../i18n/useTranslation.js';
+
+/** The translate function on its own — see readErrorMessage. */
+type Translate = Translation['t'];
 import { LOCALE_NAMES, SUPPORTED_LOCALES, type Locale } from '../i18n/locale.js';
 import { useTheme, type Theme } from '../theme/useTheme.js';
 
@@ -140,13 +145,49 @@ function absoluteUrl(pathAndQuery: string): string {
  * a not-yet-restarted server made the roster import look like it did
  * nothing, with no error to explain why.
  */
-async function readErrorMessage(res: Response, fallback: string): Promise<string> {
+async function readErrorMessage(
+  res: Response,
+  fallback: string,
+  /**
+   * Given, the response's structured `issues` are translated and used in
+   * preference to its `error` string. That string is English whatever the
+   * admin's language is, because the server writes it and has no idea what
+   * the browser is set to — only the client can produce the right words.
+   */
+  t?: Translate,
+): Promise<string> {
   try {
-    const body = (await res.json()) as { error?: string };
+    const body = (await res.json()) as { error?: string; issues?: EligibilityIssue[] };
+    if (t && body.issues?.length) {
+      return body.issues
+        .map((issue) => t(`createMatch.eligibility.${issue.code}`, issue.params))
+        .join(' ');
+    }
     return body.error ?? fallback;
   } catch {
     return fallback;
   }
+}
+
+/**
+ * Whether a category code can be played as `matchType`.
+ *
+ * "MS" offered while Doubles is selected is a line-up the server rejects on
+ * submit, so the choice should never be offered at all — this is what stops
+ * the form expressing it.
+ *
+ * A code carrying no discipline (an age-only category like "U15") applies to
+ * either, so it always fits: filtering it out would hide a perfectly valid
+ * choice on the strength of a convention it does not follow.
+ *
+ * Takes the match type as an argument rather than reading it from component
+ * state, because the one caller that matters most runs *during* the change —
+ * a closure would still hold the type being switched away from.
+ */
+function categoryFitsMatchType(code: string, matchType: MatchType): boolean {
+  const { disciplineCode } = parseCategoryCode(code);
+  if (!disciplineCode) return true;
+  return disciplineCode === (matchType === 'singles' ? 'S' : 'D');
 }
 
 function umpireLinkFor(match: Pick<Match, 'matchId' | 'umpireToken'>): string {
@@ -525,7 +566,9 @@ export function AdminDashboard() {
   const hasRoster = tournamentPlayers.length > 0;
   const availableCategories = Array.from(
     new Set(tournamentPlayers.flatMap((p) => parseCategoryList(p.categories))),
-  ).sort();
+  )
+    .sort()
+    .filter((code) => categoryFitsMatchType(code, matchType));
   // Narrows the player search to people actually registered for the chosen
   // category — picking from an unfiltered roster of a hundred players for a
   // "WS U15" match is exactly the busywork the search was meant to remove.
@@ -601,7 +644,7 @@ export function AdminDashboard() {
     });
 
     if (!res.ok) {
-      setMatchStatus(await readErrorMessage(res, t('createMatch.createFailed')));
+      setMatchStatus(await readErrorMessage(res, t('createMatch.createFailed'), t));
       return;
     }
     const created = (await res.json()) as { match: Match };
@@ -1016,7 +1059,17 @@ export function AdminDashboard() {
                     {t('createMatch.matchTypeLabel')}
                     <select
                       value={matchType}
-                      onChange={(e) => setMatchType(e.target.value as MatchType)}
+                      onChange={(e) => {
+                        const next = e.target.value as MatchType;
+                        setMatchType(next);
+                        // The chosen category may not survive the switch. Left
+                        // in place it would be submitted anyway — the <select>
+                        // shows a value that is no longer among its options,
+                        // which renders blank while the state still holds it.
+                        setCategory((current) =>
+                          current && !categoryFitsMatchType(current, next) ? '' : current,
+                        );
+                      }}
                     >
                       <option value="singles">{t('createMatch.singles')}</option>
                       <option value="doubles">{t('createMatch.doubles')}</option>

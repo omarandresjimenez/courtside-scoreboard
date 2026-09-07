@@ -155,8 +155,44 @@ export interface EligibilityPlayer {
   categories?: string | null;
 }
 
+/**
+ * Why a line-up was rejected, as a code rather than a sentence.
+ *
+ * These are shown to the admin, whose dashboard is translated — so the text
+ * cannot be built here. This package is framework-free and has no dictionary
+ * of its own, and the server that calls it has no idea what language the
+ * browser is in. The client translates from `code` + `params` instead.
+ *
+ * Gender and discipline each get their own code rather than being passed as a
+ * parameter, because they would otherwise be English words interpolated into a
+ * Spanish sentence — and `translate()` does plain `{{var}}` substitution, with
+ * no select/plural form to resolve them properly.
+ */
+export const ELIGIBILITY_ISSUE_CODES = [
+  'categoryNeedsSingles',
+  'categoryNeedsDoubles',
+  'notRegistered',
+  'genderNotAcceptedMale',
+  'genderNotAcceptedFemale',
+  'tooOld',
+  'mixedDoublesSide',
+] as const;
+
+/** Derived from the array above rather than declared separately, so the two
+ *  cannot drift — the list exists at runtime for the dictionary-coverage test
+ *  in the client, which a bare union could not provide. */
+export type EligibilityIssueCode = (typeof ELIGIBILITY_ISSUE_CODES)[number];
+
 export interface EligibilityIssue {
   side?: Side;
+  code: EligibilityIssueCode;
+  /** Interpolated into the translated message by the client. */
+  params: Record<string, string | number>;
+  /**
+   * English rendering of the same thing. Kept because the API answers with a
+   * plain `error` string that non-browser callers (and the server's own logs)
+   * still need to be readable — the dashboard ignores it and uses `code`.
+   */
   message: string;
 }
 
@@ -189,6 +225,8 @@ export function validateMatchEligibility(
     const expected: MatchType = code.disciplineCode === 'S' ? 'singles' : 'doubles';
     if (expected !== matchType) {
       issues.push({
+        code: expected === 'singles' ? 'categoryNeedsSingles' : 'categoryNeedsDoubles',
+        params: { category },
         message: `Category "${category}" is ${expected}, but this match is set up as ${matchType}.`,
       });
     }
@@ -200,6 +238,8 @@ export function validateMatchEligibility(
       if (registered.length > 0 && !registered.includes(category.toUpperCase())) {
         issues.push({
           side: player.side,
+          code: 'notRegistered',
+          params: { side: player.side, category },
           message: `A player on side ${player.side} is not registered for category "${category}".`,
         });
       }
@@ -208,10 +248,13 @@ export function validateMatchEligibility(
     if (code.genderCode && code.genderCode !== 'X' && player.gender) {
       const expectedGender = code.genderCode === 'M' ? 'M' : 'F';
       if (player.gender.toUpperCase() !== expectedGender) {
+        const isMale = player.gender.toUpperCase() === 'M';
         issues.push({
           side: player.side,
+          code: isMale ? 'genderNotAcceptedMale' : 'genderNotAcceptedFemale',
+          params: { side: player.side, category },
           message: `Category "${category}" does not accept a ${
-            player.gender.toUpperCase() === 'M' ? 'male' : 'female'
+            isMale ? 'male' : 'female'
           } player (side ${player.side}).`,
         });
       }
@@ -224,6 +267,8 @@ export function validateMatchEligibility(
         if (age >= code.ageLimit) {
           issues.push({
             side: player.side,
+            code: 'tooOld',
+            params: { side: player.side, category, ageLimit: code.ageLimit },
             message: `A player on side ${player.side} is too old for category "${category}" (Under ${code.ageLimit}).`,
           });
         }
@@ -243,6 +288,8 @@ export function validateMatchEligibility(
       if (!genders.has('M') || !genders.has('F')) {
         issues.push({
           side,
+          code: 'mixedDoublesSide',
+          params: { side },
           message: `Mixed doubles needs one male and one female player on side ${side}.`,
         });
       }
