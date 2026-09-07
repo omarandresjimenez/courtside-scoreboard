@@ -71,7 +71,10 @@ describe('POST /api/tournament-players/import', () => {
       .set('x-admin-password', config.adminPassword)
       .send({
         tournamentId: 'tournament-required',
-        players: [importRow(), importRow({ memberId: '19961123', firstName: 'Jane', lastName: 'Smith' })],
+        players: [
+          importRow(),
+          importRow({ memberId: '19961123', firstName: 'Jane', lastName: 'Smith' }),
+        ],
       });
 
     expect(response.status).toBe(201);
@@ -174,7 +177,7 @@ describe('GET /api/tournament-players', () => {
     expect(response.status).toBe(400);
   });
 
-  it('lists only the requested tournament\'s roster', async () => {
+  it("lists only the requested tournament's roster", async () => {
     mockPrisma.seedTournamentPlayer({ tournamentId: 'tournament-required', firstName: 'A' });
     mockPrisma.seedTournamentPlayer({ tournamentId: 'other-tournament', firstName: 'B' });
 

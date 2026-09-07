@@ -14,6 +14,7 @@ import { umpiresRouter } from './routes/umpires.js';
 import { turnRouter } from './routes/turn.js';
 import { localCaRouter } from './routes/local-ca.js';
 import { configRouter } from './routes/config.js';
+import { errorHandler } from './middleware/errorHandler.js';
 import { registerSocketHandlers } from './sockets/index.js';
 import { registerStreamSocketHandlers } from './sockets/stream.js';
 import { initializeCloudServices } from './integrations/cloud-sync.js';
@@ -77,6 +78,12 @@ export function createApp(options: CreateAppOptions = {}): CourtsideApp {
         'Run "npm run build --workspace packages/client" to host the UI from this server too.',
     );
   }
+
+  // Last, after every route including the SPA fallback above: Express only
+  // reaches error middleware registered *after* whatever threw. Anything a
+  // route rejects with (see asyncRoute) fails that one request instead of
+  // ending the process — which, on match day, would stop every court at once.
+  app.use(errorHandler);
 
   const httpServer = createServer(app);
   const io = new SocketIoServer(httpServer, { cors: { origin: '*' } });

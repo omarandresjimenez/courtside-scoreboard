@@ -50,6 +50,71 @@ describe('POST /api/matches', () => {
     expect(response.status).toBe(400);
   });
 
+  it('rejects players that do not say which side they play for', async () => {
+    // Regression. `players` was checked for length but never for contents, so
+    // this passed validation, reached Prisma, and rejected inside an async
+    // handler — which Express 4 does not catch, so the whole server exited and
+    // the client got no response at all. Every court's scoring stopped because
+    // of one malformed request.
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({ ...validSinglesBody, players: [{ name: 'X' }, { name: 'Y' }] });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'Invalid match payload.' });
+  });
+
+  it('rejects a side that is neither A nor B', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({
+        ...validSinglesBody,
+        players: [
+          { side: 'Z', name: 'X' },
+          { side: 'B', name: 'Y' },
+        ],
+      });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects players stacked on one side', async () => {
+    // Two players, both valid individually, but the match is unplayable in a
+    // way the scoring engine has no way to represent.
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({
+        ...validSinglesBody,
+        players: [
+          { side: 'A', name: 'X' },
+          { side: 'A', name: 'Y' },
+        ],
+      });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects doubles that are not two a side', async () => {
+    const response = await request(buildApp())
+      .post('/api/matches')
+      .set('x-admin-password', config.adminPassword)
+      .send({
+        ...validSinglesBody,
+        matchType: 'doubles',
+        players: [
+          { side: 'A', name: 'P1' },
+          { side: 'A', name: 'P2' },
+          { side: 'A', name: 'P3' },
+          { side: 'B', name: 'P4' },
+        ],
+      });
+
+    expect(response.status).toBe(400);
+  });
+
   it('rejects an invalid scoring config (cap not greater than pointsToWin)', async () => {
     const response = await request(buildApp())
       .post('/api/matches')
@@ -476,7 +541,9 @@ describe('POST /api/matches — roster-backed players', () => {
         category: 'WS',
         players: [
           { side: 'A', tournamentPlayerId: rosterPlayer.id, name: 'Someone Else' },
-          { side: 'B', tournamentPlayerId: mockPrisma.seedTournamentPlayer({
+          {
+            side: 'B',
+            tournamentPlayerId: mockPrisma.seedTournamentPlayer({
               tournamentId: 'tournament-required',
               firstName: 'Amy',
               lastName: 'Ng',
@@ -492,7 +559,7 @@ describe('POST /api/matches — roster-backed players', () => {
     expect(players.map((p) => `${p.name} ${p.lastName}`).sort()).toEqual(['Amy Ng', 'Jane Roe']);
   });
 
-  it('rejects a tournamentPlayerId not found in this tournament\'s roster', async () => {
+  it("rejects a tournamentPlayerId not found in this tournament's roster", async () => {
     const response = await request(buildApp())
       .post('/api/matches')
       .set('x-admin-password', config.adminPassword)
@@ -521,7 +588,7 @@ describe('POST /api/matches — roster-backed players', () => {
     expect(response.status).toBe(400);
   });
 
-  it('rejects a category not among the tournament\'s imported categories', async () => {
+  it("rejects a category not among the tournament's imported categories", async () => {
     mockPrisma.seedTournamentPlayer({ tournamentId: 'tournament-required', categories: 'MS/MD' });
     const response = await request(buildApp())
       .post('/api/matches')
@@ -531,7 +598,7 @@ describe('POST /api/matches — roster-backed players', () => {
     expect(response.body.error).toContain('not one of');
   });
 
-  it('accepts a category that is among the tournament\'s imported categories', async () => {
+  it("accepts a category that is among the tournament's imported categories", async () => {
     mockPrisma.seedTournamentPlayer({ tournamentId: 'tournament-required', categories: 'MS/MD' });
     const response = await request(buildApp())
       .post('/api/matches')
@@ -540,7 +607,7 @@ describe('POST /api/matches — roster-backed players', () => {
     expect(response.status).toBe(201);
   });
 
-  it('rejects a female player in a men\'s singles category', async () => {
+  it("rejects a female player in a men's singles category", async () => {
     const male = mockPrisma.seedTournamentPlayer({
       tournamentId: 'tournament-required',
       firstName: 'John',
