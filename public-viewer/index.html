@@ -69,118 +69,181 @@
       /* Broadcast-style score bug: a small translucent panel sitting over the
          video's top-left corner, the way TV sports overlays a score without
          taking a whole quarter of the screen away from the picture. */
+      /* ------------------------------------------------------------------
+       * Score bug, styled after a BWF television graphic.
+       *
+       * The layout is the broadcast's, left to right: games won, country,
+       * name, serve marker, then one cell per game with the one in play
+       * picked out in red. Deliberately light and opaque rather than the
+       * dark translucent panel this used to be — a broadcast bug has to stay
+       * legible over whatever the camera happens to be pointing at, and a
+       * translucent dark card over a bright green court is the one case that
+       * fails.
+       *
+       * Both rows align because every cell except the name is a fixed width
+       * and the name takes the slack, so the two rows cannot drift apart when
+       * one player's name is longer than the other's.
+       * ------------------------------------------------------------------ */
       .scorebug {
         position: absolute;
         top: 0.9rem;
         left: 0.9rem;
-        /* vw-capped so the bug stays proportional on a phone, where a fixed
-           11rem would eat half the width of a portrait video. */
-        min-width: min(11rem, 38vw);
-        max-width: min(60vw, 22rem);
-        border-radius: var(--radius-sm);
-        background: rgba(10, 14, 26, 0.62);
-        border: 1px solid rgba(148, 163, 184, 0.25);
-        backdrop-filter: blur(6px);
-        -webkit-backdrop-filter: blur(6px);
+        border-radius: 3px;
         overflow: hidden;
-        font-size: clamp(0.8rem, 1.6vw, 0.95rem);
-        /* Independent of the video's own scale — the bug reads at a
-           comfortable size whether the stage is a phone strip or a full
-           16:9 desktop window. */
+        /* Wide enough that the name column has slack to fill, which is what
+           puts the serve marker at its right edge instead of jammed against
+           the name — and what makes this read as a broadcast strip rather
+           than a label that shrink-wraps whatever is in it. */
+        min-width: min(21rem, 62vw);
+        background: #fff;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+        font-size: clamp(0.72rem, 1.5vw, 0.92rem);
+        line-height: 1;
         z-index: 5;
-        opacity: 0.7;
+        /* Lets the picture through behind the bug. Applied to the whole
+           element rather than to the background colours so the black games
+           block, the white body and the red current-game cell all fade
+           together — fading only the backgrounds would leave solid black text
+           floating over the video. */
+        opacity: 0.5;
+      }
+
+      /* Court and live indicator — not part of the television graphic, but
+         this page is not a broadcast: nothing else on screen says which court
+         you are watching or whether the data is still arriving. */
+      .bug-head {
+        display: flex;
+        align-items: center;
+        gap: 0.5em;
+        padding: 0.36em 0.7em;
+        background: #14161c;
+        color: #e8eaed;
+        font-size: 0.78em;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
       }
       .bug-category {
-        padding: 0.05rem 0.4rem;
-        border: 1px solid var(--border-strong);
-        border-radius: 4px;
-        color: var(--text-dim);
-        font-size: 0.85em;
-        letter-spacing: 0.02em;
+        padding: 0.1em 0.4em;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.14);
+        font-size: 0.92em;
         white-space: nowrap;
       }
       .bug-category[hidden] {
         display: none !important;
       }
-      .bug-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.5rem;
-        padding: 0.3em 0.6em;
-        background: rgba(34, 211, 238, 0.1);
-        color: var(--accent);
-        font-size: 0.85em;
-        font-weight: 700;
-        letter-spacing: 0.03em;
-        text-transform: uppercase;
-      }
       .bug-live {
         display: inline-flex;
         align-items: center;
-        gap: 0.3em;
-        color: var(--text-dim);
+        gap: 0.35em;
+        margin-left: auto;
+        color: #b9bec7;
         font-weight: 600;
       }
+
       .bug-row {
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.6em;
-        padding: 0.32em 0.6em;
-        border-top: 1px solid rgba(148, 163, 184, 0.15);
+        align-items: stretch;
+        border-top: 1px solid #d9dce1;
       }
-      .bug-row .name {
+      .bug-row:first-of-type {
+        border-top: 0;
+      }
+
+      /* Games won. Black block at the far left, exactly as the broadcast has
+         it — the one number that decides the match, kept apart from the
+         per-game scores so the two are never misread for each other. */
+      .bug-games {
         display: flex;
         align-items: center;
-        gap: 0.4em;
-        min-width: 0;
-        font-size: 1.05em;
+        justify-content: center;
+        min-width: 2.1em;
+        padding: 0.42em 0.3em;
+        background: #14161c;
+        color: #fff;
         font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Country. Two-letter codes become a flag; anything else stays as
+         letters, which is also what Windows shows for the flag characters. */
+      .bug-country {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 2.6em;
+        padding: 0.42em 0.35em;
+        color: #14161c;
+        font-size: 0.9em;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+      /* Collapsed rather than removed when no side has a country, so the two
+         rows still line up with each other. */
+      .scorebug.no-country .bug-country {
+        display: none;
+      }
+
+      .bug-name {
+        display: flex;
+        align-items: center;
+        gap: 0.5em;
+        flex: 1;
+        min-width: 5.5em;
+        max-width: min(42vw, 15rem);
+        padding: 0.42em 0.6em 0.42em 0.2em;
+        color: #14161c;
+        font-size: 1.02em;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        text-transform: uppercase;
         white-space: nowrap;
+        overflow: hidden;
+      }
+      .bug-name > span {
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .bug-row.a .name {
-        color: var(--side-a);
+      .bug-name.is-winner {
+        color: #b8102e;
       }
-      .bug-row.b .name {
-        color: var(--side-b);
-      }
-      .bug-row .scores {
-        display: flex;
-        gap: 0.45em;
-        flex-shrink: 0;
-      }
-      .bug-row strong {
-        min-width: 1.3em;
-        text-align: center;
-        font-variant-numeric: tabular-nums;
-        font-size: 1.1em;
-        color: var(--text-dim);
-      }
-      .bug-row strong.live {
-        color: var(--warning);
-        font-weight: 800;
-        font-size: 1.3em;
-      }
-      .bug-row strong.winner {
-        color: var(--success);
-      }
+
+      /* Serve marker: the shuttle sits on the serving player's row, pointing
+         into the name, the way the television graphic places it. Drawn rather
+         than set as an emoji so its colour matches the current-game cell and
+         it renders identically everywhere. */
       .serve {
-        display: inline-flex;
-        padding: 0.1em 0.4em;
-        border-radius: 999px;
-        background: rgba(52, 211, 153, 0.18);
-        color: var(--success);
-        font-size: 0.62em;
-        font-weight: 700;
-        text-transform: uppercase;
+        flex-shrink: 0;
+        width: 1.5em;
+        height: 0.95em;
+        margin-left: auto;
+        fill: #d81f36;
+      }
+
+      .bug-scores {
+        display: flex;
         flex-shrink: 0;
       }
-      .winner-name {
-        color: var(--success) !important;
+      .bug-scores b {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 2.05em;
+        padding: 0.42em 0.2em;
+        border-left: 1px solid #d9dce1;
+        color: #14161c;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
       }
+      /* The game being played. Red block at the far right — the number a
+         viewer glancing up actually wants. */
+      .bug-scores b.current {
+        border-left-color: #d81f36;
+        background: #d81f36;
+        color: #fff;
+      }
+
       /* Video stage. The score rides on top of it as a bug rather than sitting
          underneath, so the picture can claim nearly the whole viewport. */
       .stage {
@@ -460,9 +523,7 @@
       .stage.fs-manual .scorebug {
         top: max(1.4rem, env(safe-area-inset-top));
         left: max(1.4rem, env(safe-area-inset-left));
-        min-width: min(16rem, 42vw);
-        max-width: min(60vw, 30rem);
-        font-size: clamp(0.95rem, 2.2vw, 1.35rem);
+        font-size: clamp(0.9rem, 1.9vw, 1.3rem);
       }
 
       @supports (padding: env(safe-area-inset-top)) {
@@ -1264,6 +1325,35 @@
         return names.join(' / ') || side;
       }
 
+      /** The country recorded for a side, if the tournament captured one. */
+      function countryOf(data, side) {
+        return (data.teams?.[side]?.country || '').trim();
+      }
+
+      /**
+       * A two-letter code becomes its flag; anything else is shown as up to
+       * three letters, which is the form rosters usually carry ("CHN", "FRA")
+       * and also what Windows falls back to for the flag characters anyway.
+       */
+      function countryLabel(country) {
+        if (!country) return '';
+        if (/^[A-Za-z]{2}$/.test(country)) {
+          return String.fromCodePoint(
+            ...country
+              .toUpperCase()
+              .split('')
+              .map((c) => 0x1f1e6 + c.charCodeAt(0) - 65),
+          );
+        }
+        return country.slice(0, 3).toUpperCase();
+      }
+
+      /** Serve marker — cork and feathers, pointing into the name. */
+      const SHUTTLE =
+        '<svg class="serve" viewBox="0 0 20 12" aria-hidden="true">' +
+        '<circle cx="15.2" cy="6" r="4.7"/>' +
+        '<path d="M11.6 3.4 L2.5 1.2 L2.5 10.8 L11.6 8.6 Z"/></svg>';
+
       function render(data) {
         const d = data.derived || {};
         // Mirror the app's own ordering: completed sets, then the one in play.
@@ -1286,24 +1376,33 @@
         categoryEl.hidden = !categoryText;
         $('board').hidden = false;
 
+        // Hidden rather than left blank when neither side has one, so the
+        // rows do not carry an empty column for a tournament that never
+        // records countries.
+        const anyCountry = ['A', 'B'].some((side) => countryOf(data, side));
+        $('board').classList.toggle('no-country', !anyCountry);
+
         for (const side of ['A', 'B']) {
           const serving = d.serve?.servingSide === side && !d.matchWinner;
           const won = d.matchWinner === side;
           const scores = shown
-            .map((s) => {
+            .map((s, index) => {
               const v = side === 'A' ? s.scoreA : s.scoreB;
-              const cls = [s.winner ? '' : 'live', s.winner === side ? 'winner' : '']
-                .filter(Boolean)
-                .join(' ');
-              return `<strong class="${cls}">${v ?? 0}</strong>`;
+              // The game in play is the last one shown, and only while the
+              // match is still running — a finished match has no red cell.
+              const current = !d.matchWinner && index === shown.length - 1;
+              return `<b class="${current ? 'current' : ''}">${v ?? 0}</b>`;
             })
             .join('');
+
           $(`row${side}`).innerHTML =
-            `<span class="name${won ? ' winner-name' : ''}">` +
-            escapeHtml(sideName(data, side)) +
-            (serving ? '<span class="serve">Serv</span>' : '') +
+            `<span class="bug-games">${d.setsWon?.[side] ?? 0}</span>` +
+            `<span class="bug-country">${escapeHtml(countryLabel(countryOf(data, side)))}</span>` +
+            `<span class="bug-name${won ? ' is-winner' : ''}">` +
+            `<span>${escapeHtml(sideName(data, side))}</span>` +
+            (serving ? SHUTTLE : '') +
             '</span>' +
-            `<span class="scores">${scores}</span>`;
+            `<span class="bug-scores">${scores}</span>`;
         }
 
         if (d.matchWinner) {
