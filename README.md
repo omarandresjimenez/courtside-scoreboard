@@ -210,8 +210,9 @@ name/country per side (auto-filled from a picked roster player's own
 club/country, still editable), the umpire and TV links surfaced right after
 creation (the umpire link only once — the server never re-serves that
 token), the full scoring engine (undo, configurable formats, doubles serve
-rotation and court-position setup, mid-game and between-games intervals
-with a countdown the umpire can resume early, retirement with the retired
+rotation and court-position setup, a two-minute warm-up when the match starts plus
+mid-game and between-games intervals, each with a countdown the umpire can
+skip or resume early, retirement with the retired
 side labeled on every summary screen), and the umpire → server → TV
 real-time score sync over Socket.io. The umpire screen is a visual court
 diagram modeled on official umpire apps — see

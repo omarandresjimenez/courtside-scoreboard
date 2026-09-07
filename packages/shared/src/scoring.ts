@@ -26,10 +26,10 @@ export interface SetResult {
   /** True once the umpire has dismissed this set's mid-game interval break. */
   intervalResumed: boolean;
   /**
-   * True once the umpire has dismissed the between-games break that opens
-   * this set (irrelevant for set 1, which has no break before it). Tracked
-   * separately from `intervalResumed` — they are two different breaks, and
-   * conflating them into one flag meant dismissing the opening break also
+   * True once the umpire has dismissed the break that opens this set — the
+   * warm-up before game 1, or the between-games break before any later one.
+   * Tracked separately from `intervalResumed` — they are two different breaks,
+   * and conflating them into one flag meant dismissing the opening break also
    * silently pre-dismissed this set's own mid-game interval later on.
    * Optional so existing SetResult literals need not specify it.
    */
@@ -44,16 +44,35 @@ export interface ServeState {
 }
 
 /**
- * Badminton has two kinds of break, and they are not the same length:
- * a mid-game interval when the leader first reaches the interval score,
- * and a longer break between games. The final game has no break after it —
- * there is no next game to break before.
+ * Badminton has three kinds of break, and they are not the same length:
+ * a warm-up before the first rally, a mid-game interval when the leader first
+ * reaches the interval score, and a longer break between games. The final game
+ * has no break after it — there is no next game to break before.
  */
-export type IntervalKind = 'MID_GAME' | 'BETWEEN_GAMES';
+export type IntervalKind = 'WARM_UP' | 'MID_GAME' | 'BETWEEN_GAMES';
 
 export const INTERVAL_SECONDS: Record<IntervalKind, number> = {
+  WARM_UP: 120,
   MID_GAME: 60,
   BETWEEN_GAMES: 120,
+};
+
+/**
+ * What each break is called on screen.
+ *
+ * Lives here rather than in each screen because there are four places that
+ * label a break — the umpire screen twice, the TV screen, and the public
+ * viewer — and every one of them used to be a two-way ternary that silently
+ * labelled anything that was not MID_GAME as "Game interval". Adding a third
+ * kind would have mislabelled it in all four at once.
+ *
+ * The public viewer has no build step and cannot import this; it keeps a
+ * mirrored copy, which its own comment points back here.
+ */
+export const INTERVAL_LABELS: Record<IntervalKind, string> = {
+  WARM_UP: 'Warm-up',
+  MID_GAME: 'Interval',
+  BETWEEN_GAMES: 'Game interval',
 };
 
 export interface IntervalState {
@@ -202,12 +221,12 @@ export function deriveMatchState(
       }
 
       case 'RESUME_INTERVAL': {
-        // The same event dismisses either break; which one is currently
-        // showing is unambiguous from the score — a set only sits at 0-0
-        // with a prior completed set while its own opening break is up,
-        // since intervalAt is always greater than zero.
-        const isOpeningBreak =
-          completedSets.length > 0 && current.scoreA === 0 && current.scoreB === 0;
+        // The same event dismisses any of the three breaks; which one is
+        // showing is unambiguous from the score — a set only sits at 0-0 while
+        // its own opening break is up, since intervalAt is always greater than
+        // zero. Game 1 at 0-0 is the warm-up, a later game at 0-0 is the
+        // between-games break, and both are "the break that opens this set".
+        const isOpeningBreak = current.scoreA === 0 && current.scoreB === 0;
         if (isOpeningBreak) current.openingBreakResumed = true;
         else current.intervalResumed = true;
         break;
@@ -319,19 +338,30 @@ export function deriveMatchState(
         : false;
 
   const midGameInterval = current.intervalTriggered && !current.intervalResumed && !matchWinner;
-  // Between games: the previous game is decided, the next has not started,
-  // and the umpire has not resumed yet. There is no break after the last
-  // game, which `matchWinner` already excludes.
-  const betweenGames =
+  /**
+   * The break that opens a game: nothing scored in it yet and the umpire has
+   * not resumed. There is no break after the last game, which `matchWinner`
+   * already excludes.
+   *
+   * `servingSide` is what distinguishes "the match has started" from "the
+   * umpire is still setting up ends and first server". Both look like 0-0 with
+   * no completed sets, and only the first is a warm-up — without this check a
+   * freshly created match would sit in a warm-up nobody asked for, before the
+   * umpire had even pressed Start match. It carries across a set boundary (the
+   * side that won the last point serves the next game), so this reads the same
+   * for the between-games break.
+   */
+  const openingBreak =
     !matchWinner &&
-    completedSets.length > 0 &&
+    servingSide !== null &&
     current.scoreA === 0 &&
     current.scoreB === 0 &&
     !current.openingBreakResumed;
+  const openingKind: IntervalKind = completedSets.length === 0 ? 'WARM_UP' : 'BETWEEN_GAMES';
   const interval: IntervalState | null = midGameInterval
     ? { kind: 'MID_GAME', seconds: INTERVAL_SECONDS.MID_GAME }
-    : betweenGames
-      ? { kind: 'BETWEEN_GAMES', seconds: INTERVAL_SECONDS.BETWEEN_GAMES }
+    : openingBreak
+      ? { kind: openingKind, seconds: INTERVAL_SECONDS[openingKind] }
       : null;
 
   return {

@@ -821,3 +821,84 @@ describe('UmpireScreen', () => {
     });
   });
 });
+
+describe('UmpireScreen — warm-up', () => {
+  const ready = (payload: MatchStatePayload) => {
+    mockUseMatchState.mockReturnValue({
+      state: payload,
+      connected: true,
+      isFromCache: false,
+      error: null,
+      ...noopHandlers,
+    });
+  };
+
+  /** The state right after Start match: serve chosen, nothing scored yet. */
+  const warmingUp = () =>
+    buildState({
+      currentSet: {
+        setNumber: 1,
+        scoreA: 0,
+        scoreB: 0,
+        winner: null,
+        intervalTriggered: false,
+        intervalResumed: false,
+      },
+      interval: { kind: 'WARM_UP', seconds: 120 },
+    });
+
+  it('calls the break a warm-up rather than a game interval', () => {
+    ready(warmingUp());
+    renderAt('m1', 'tok');
+
+    expect(screen.getByRole('button', { name: /Warm-up/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Game interval/)).not.toBeInTheDocument();
+  });
+
+  it('offers to skip it, not to resume play that has not started', () => {
+    ready(warmingUp());
+    renderAt('m1', 'tok');
+
+    expect(screen.getByRole('button', { name: /tap to skip/ })).toBeInTheDocument();
+  });
+
+  it('skips the warm-up on confirmation', async () => {
+    ready(warmingUp());
+    renderAt('m1', 'tok');
+
+    await userEvent.click(screen.getByRole('button', { name: /Warm-up/ }));
+    expect(screen.getByText('Skip the warm-up?')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Skip warm-up' }));
+    expect(noopHandlers.resumeFromInterval).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the warm-up running if the umpire backs out', async () => {
+    ready(warmingUp());
+    renderAt('m1', 'tok');
+
+    await userEvent.click(screen.getByRole('button', { name: /Warm-up/ }));
+    await userEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+
+    expect(noopHandlers.resumeFromInterval).not.toHaveBeenCalled();
+  });
+
+  it('locks scoring while the warm-up runs', async () => {
+    ready(warmingUp());
+    renderAt('m1', 'tok');
+
+    // A point cannot be scored during a break — the umpire ends it first.
+    const pointButtons = screen.getAllByRole('button', { name: /Point to/ });
+    await userEvent.click(pointButtons[0]!);
+
+    expect(noopHandlers.addPoint).not.toHaveBeenCalled();
+  });
+
+  it('still says resume for a mid-game interval', () => {
+    ready(buildState({ interval: { kind: 'MID_GAME', seconds: 60 }, onInterval: true }));
+    renderAt('m1', 'tok');
+
+    expect(screen.getByRole('button', { name: /tap to resume/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Warm-up/)).not.toBeInTheDocument();
+  });
+});

@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react';
-import { umpireCall, type Side, formatSideNames, formatPlayerName } from '@courtside/shared';
+import {
+  umpireCall,
+  type Side,
+  type IntervalKind,
+  INTERVAL_LABELS,
+  formatSideNames,
+  formatPlayerName,
+} from '@courtside/shared';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useMatchState } from '../lib/useMatchState.js';
 import { CourtDiagram } from './CourtDiagram.js';
@@ -46,6 +53,26 @@ function storeBaseLeftSide(matchId: string, side: Side) {
  * Set 04's umpire screen, rebuilt around a plan view of the court — see
  * docs/umpire-screen-spec.md for the reference behaviour this follows.
  */
+/** Per-break wording for the banner and its confirm dialog. */
+const BREAK_WORDING: Record<
+  IntervalKind,
+  { verb: string; action: string; title: string; noun: string }
+> = {
+  WARM_UP: {
+    verb: 'skip',
+    action: 'Skip warm-up',
+    title: 'Skip the warm-up?',
+    noun: 'warm-up',
+  },
+  MID_GAME: { verb: 'resume', action: 'Resume', title: 'Resume play?', noun: 'interval' },
+  BETWEEN_GAMES: {
+    verb: 'resume',
+    action: 'Resume',
+    title: 'Start the next game?',
+    noun: 'interval',
+  },
+};
+
 export function UmpireScreen() {
   const { matchId } = useParams<{ matchId: string }>();
   const [searchParams] = useSearchParams();
@@ -108,6 +135,10 @@ export function UmpireScreen() {
 
   const isReadyToScore = derived.serve.servingSide !== null;
   const breakNow = derived.interval;
+  // A warm-up is *skipped*, the other two are *resumed* — the umpire is
+  // cutting a break short in every case, but calling the warm-up "resume play"
+  // would describe play that has not started yet.
+  const breakWording = BREAK_WORDING[breakNow?.kind ?? 'MID_GAME'];
   // Points are locked during either kind of break; the umpire ends it.
   const scoringLocked = !isReadyToScore || breakNow !== null || derived.matchWinner !== null;
   const secondsLeft = remaining ?? 0;
@@ -358,8 +389,8 @@ export function UmpireScreen() {
           )}
           {breakNow && (
             <button type="button" className="banner" onClick={() => setPendingAction('resume')}>
-              {breakNow.kind === 'MID_GAME' ? 'Interval' : 'Game interval'}
-              {` ${formatCountdown(secondsLeft)}`} — tap to resume
+              {INTERVAL_LABELS[breakNow.kind]}
+              {` ${formatCountdown(secondsLeft)}`} — tap to {breakWording.verb}
             </button>
           )}
           {canUndo && (
@@ -381,15 +412,15 @@ export function UmpireScreen() {
 
       {pendingAction === 'resume' && breakNow && (
         <ConfirmDialog
-          title={breakNow.kind === 'MID_GAME' ? 'Resume play?' : 'Start the next game?'}
+          title={breakWording.title}
           message={
             secondsLeft > 0
-              ? `${formatCountdown(secondsLeft)} of the interval still to run.`
-              : 'The interval is over.'
+              ? `${formatCountdown(secondsLeft)} of the ${breakWording.noun} still to run.`
+              : `The ${breakWording.noun} is over.`
           }
           choices={[
             {
-              label: 'Resume',
+              label: breakWording.action,
               onSelect: () => {
                 resumeFromInterval();
                 setPendingAction(null);

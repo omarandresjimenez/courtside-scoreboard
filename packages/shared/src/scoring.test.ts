@@ -403,6 +403,52 @@ describe('interval kinds', () => {
     expect(toInterval([startSet(undefined, 'a1', 'A'), point('A')])).toBeNull();
   });
 
+  it('opens a 2-minute warm-up the moment the umpire starts the match', () => {
+    expect(toInterval([startSet(undefined, 'a1', 'A')])).toEqual({
+      kind: 'WARM_UP',
+      seconds: 120,
+    });
+  });
+
+  it('shows no warm-up before the match has been started', () => {
+    // A created match sits at 0-0 with no completed sets, exactly like a
+    // warm-up does. What separates them is whether the umpire has chosen ends
+    // and first server yet — without that check, every freshly created match
+    // would open on a warm-up nobody asked for.
+    expect(toInterval([])).toBeNull();
+  });
+
+  it('clears the warm-up once the umpire skips it', () => {
+    expect(toInterval([startSet(undefined, 'a1', 'A'), resumeInterval()])).toBeNull();
+  });
+
+  it('does not re-open the warm-up after the first point', () => {
+    const events = [startSet(undefined, 'a1', 'A'), resumeInterval(), point('A')];
+    expect(toInterval(events)).toBeNull();
+  });
+
+  it('skipping the warm-up does not pre-dismiss the mid-game interval', () => {
+    // The trap `openingBreakResumed` exists to avoid: one flag for both breaks
+    // meant dismissing the opening one silently dismissed the mid-game one too.
+    const events = [
+      startSet(undefined, 'a1', 'A'),
+      resumeInterval(),
+      ...Array.from({ length: 11 }, () => point('A')),
+    ];
+    expect(toInterval(events)).toEqual({ kind: 'MID_GAME', seconds: 60 });
+  });
+
+  it('calls the break before game 2 a between-games break, not a warm-up', () => {
+    // Both are "the break that opens this game"; only the first game's is a
+    // warm-up.
+    const events = [
+      startSet(undefined, 'a1', 'A'),
+      resumeInterval(),
+      ...Array.from({ length: 21 }, () => point('A')),
+    ];
+    expect(toInterval(events)).toEqual({ kind: 'BETWEEN_GAMES', seconds: 120 });
+  });
+
   it('reports a 60-second mid-game interval at the interval score', () => {
     const events = [
       startSet(undefined, 'a1', 'A'),

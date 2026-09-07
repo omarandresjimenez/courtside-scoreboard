@@ -1309,11 +1309,23 @@
         if (d.matchWinner) {
           setStatus(`${sideName(data, d.matchWinner)} wins the match`);
         } else if (d.interval) {
-          setStatus(d.interval.kind === 'MID_GAME' ? 'Interval' : 'Game interval');
+          setStatus(INTERVAL_LABELS[d.interval.kind] ?? 'Interval');
         } else {
           statusEl.hidden = true;
         }
       }
+
+      /**
+       * Mirror of INTERVAL_LABELS in packages/shared/src/scoring.ts — this page
+       * has no build step, so it cannot import from the workspace. Keep the two
+       * in step: a kind missing here falls back to "Interval" rather than
+       * showing nothing, but it will be the wrong word.
+       */
+      const INTERVAL_LABELS = {
+        WARM_UP: 'Warm-up',
+        MID_GAME: 'Interval',
+        BETWEEN_GAMES: 'Game interval',
+      };
 
       function escapeHtml(s) {
         return String(s).replace(

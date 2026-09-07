@@ -1,4 +1,4 @@
-import { formatSideNames, formatPlayerName } from '@courtside/shared';
+import { formatSideNames, formatPlayerName, INTERVAL_LABELS } from '@courtside/shared';
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMatchState } from '../lib/useMatchState.js';
@@ -126,11 +126,7 @@ export function TvScreen() {
           </button>
         </section>
       ) : (
-        derived.interval && (
-          <p className="banner">
-            {derived.interval.kind === 'MID_GAME' ? 'Interval' : 'Game interval'}
-          </p>
-        )
+        derived.interval && <p className="banner">{INTERVAL_LABELS[derived.interval.kind]}</p>
       )}
     </main>
   );
