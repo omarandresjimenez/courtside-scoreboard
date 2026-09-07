@@ -45,12 +45,31 @@ jest.mock('./turn-credentials.js', () => ({
   fetchInternetIceServers: () => mockFetchIce(),
 }));
 
+const LIVE_INPUT = {
+  publishUrl: 'https://customer-x.cloudflarestream.com/secret/webRTC/publish',
+  playbackUrl: 'https://customer-x.cloudflarestream.com/secret/webRTC/play',
+};
+const cloudHandle = { stop: jest.fn(), viewerCount: () => 0, setPaused: jest.fn() };
+const mockFetchCourtLiveInput = jest.fn(async (): Promise<unknown> => null);
+jest.mock('./cloudflare-stream.js', () => ({
+  fetchCourtLiveInput: (...args: unknown[]) => mockFetchCourtLiveInput(...(args as [])),
+}));
+
+const mockBroadcastViaCloudflare = jest.fn(async (..._args: unknown[]) => cloudHandle);
+jest.mock('./cloudflare-broadcast.js', () => ({
+  broadcastViaCloudflare: (...args: unknown[]) => mockBroadcastViaCloudflare(...args),
+}));
+
 import { useCameraBroadcast } from './useCameraBroadcast.js';
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockRequestCameraStream.mockResolvedValue(stream);
   mockFetchIce.mockResolvedValue(RELAY_SERVERS);
+  // No Cloudflare unless a test says so, which is the configuration every
+  // pre-existing case here was written against.
+  mockFetchCourtLiveInput.mockResolvedValue(null);
+  mockBroadcastViaCloudflare.mockResolvedValue(cloudHandle);
 });
 
 async function started(courtId = 'court1') {
@@ -268,5 +287,119 @@ describe('useCameraBroadcast', () => {
 
       expect(mockWatchForMatchStart).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+describe('choosing an internet path', () => {
+  it('uses the peer mesh when the court has no Cloudflare input', async () => {
+    const view = await started();
+
+    expect(mockBroadcastViaCloudflare).not.toHaveBeenCalled();
+    expect(mockBroadcastToInternet).toHaveBeenCalled();
+    expect(view.result.current.internetMode).toBe('mesh');
+  });
+
+  it('prefers Cloudflare when the court has an input', async () => {
+    mockFetchCourtLiveInput.mockResolvedValue(LIVE_INPUT);
+
+    const view = await started();
+
+    // One upload that Cloudflare fans out, instead of one per viewer from
+    // this phone.
+    expect(mockBroadcastViaCloudflare).toHaveBeenCalledWith(
+      expect.anything(),
+      'court1',
+      stream,
+      LIVE_INPUT,
+      expect.any(Object),
+    );
+    expect(mockBroadcastToInternet).not.toHaveBeenCalled();
+    expect(view.result.current.internetMode).toBe('cloud');
+  });
+
+  it('does not mint TURN credentials it will not use', async () => {
+    mockFetchCourtLiveInput.mockResolvedValue(LIVE_INPUT);
+
+    await started();
+
+    // The Cloudflare path talks to a public host, so a relay has nothing to
+    // contribute and fetching one is a wasted round trip.
+    expect(mockFetchIce).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the mesh when publishing to Cloudflare fails', async () => {
+    mockFetchCourtLiveInput.mockResolvedValue(LIVE_INPUT);
+    mockBroadcastViaCloudflare.mockRejectedValue(new Error('WHIP refused'));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const view = await started();
+
+    // The court is holding a live camera; a few viewers beats none.
+    expect(mockBroadcastToInternet).toHaveBeenCalled();
+    expect(view.result.current.internetMode).toBe('mesh');
+    warn.mockRestore();
+  });
+
+  it('still broadcasts on the LAN when every internet path fails', async () => {
+    mockFetchCourtLiveInput.mockRejectedValue(new Error('offline'));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const view = await started();
+
+    expect(mockStartBroadcasting).toHaveBeenCalled();
+    expect(view.result.current.status).toBe('live');
+    warn.mockRestore();
+  });
+
+  it('reports the cloud upload going down and coming back', async () => {
+    mockFetchCourtLiveInput.mockResolvedValue(LIVE_INPUT);
+    const view = await started();
+
+    const options = mockBroadcastViaCloudflare.mock.calls[0]?.[4] as {
+      onConnectedChange: (connected: boolean) => void;
+    };
+    await act(async () => options.onConnectedChange(false));
+    expect(view.result.current.internetConnected).toBe(false);
+
+    await act(async () => options.onConnectedChange(true));
+    expect(view.result.current.internetConnected).toBe(true);
+  });
+
+  it('does not leave the phone publishing when the court stops mid-connect', async () => {
+    let release: (value: unknown) => void = () => {};
+    mockFetchCourtLiveInput.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    const view = renderHook(() => useCameraBroadcast('court1'));
+    let starting: Promise<void> = Promise.resolve();
+    await act(async () => {
+      starting = view.result.current.start();
+      // Let the camera resolve so start() is parked on the live-input lookup.
+      await Promise.resolve();
+    });
+
+    act(() => view.result.current.stop());
+
+    await act(async () => {
+      release(LIVE_INPUT);
+      await starting;
+    });
+
+    // Without the guard this phone would still be uploading to Cloudflare with
+    // nothing left holding the handle to stop it.
+    expect(cloudHandle.stop).toHaveBeenCalled();
+    expect(view.result.current.status).toBe('idle');
+  });
+
+  it('forgets the internet path on stop', async () => {
+    mockFetchCourtLiveInput.mockResolvedValue(LIVE_INPUT);
+    const view = await started();
+
+    act(() => view.result.current.stop());
+
+    expect(view.result.current.internetMode).toBeNull();
   });
 });

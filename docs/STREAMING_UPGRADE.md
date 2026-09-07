@@ -562,6 +562,190 @@ Screen (section 6c) is what does that.
 
 ---
 
+## 6e. ✅ Internet delivery, Stage 3 — Cloudflare Stream, past the viewer cap
+
+### The ceiling this removes
+
+Stage 2 (6b) delivers internet video as a **WebRTC mesh**: the court-side phone
+opens a separate peer connection, with its own encoder output, for every viewer.
+That is why `MAX_INTERNET_VIEWERS` is 5. It is not a arbitrary safety margin —
+a phone uplink is typically 5–15 Mbps, a viewer costs ~2.6 Mbps, and the sixth
+viewer does not merely fail, it degrades the picture for the five already
+watching and for the LAN viewers sharing the same radio.
+
+Dozens of viewers is a different shape of problem, and no amount of tuning the
+mesh reaches it. It needs the upload to happen **once**.
+
+### What shipped
+
+The phone publishes a single stream to a **Cloudflare Stream live input**, and
+Cloudflare fans it out from its own edge. The court's uplink now carries one
+stream whether two people are watching or two hundred.
+
+|                        | Mesh (6b)                  | Cloudflare (this)  |
+| ---------------------- | -------------------------- | ------------------ |
+| Uploads from the phone | one **per viewer**         | **one**, total     |
+| Viewer ceiling         | `MAX_INTERNET_VIEWERS` = 5 | no fixed limit     |
+| Latency                | ~200–500 ms                | < 500 ms           |
+| Needs an account       | no                         | yes                |
+| Viewer count reported  | yes                        | **no** (see below) |
+
+Both paths still exist. Cloudflare is preferred when configured; the mesh is the
+fallback, because it needs no account, no billing and no configuration, and a
+venue with neither is exactly the case this app is built to survive.
+
+### 🔬 WHIP/WHEP, and why not HLS
+
+The original plan was WHIP ingest → HLS playback, on the reasoning that HLS is
+plain HTTP and caches on any CDN. **Cloudflare does not allow that combination**:
+
+> "We do not yet support inputs using RTMP/SRT to be played using WHEP, or
+> inputs using WHIP to be recorded and played using HLS/DASH."
+
+HLS playback would require RTMP or SRT ingest, and a browser cannot speak either
+without a native encoder such as OBS. That would destroy the property the whole
+broadcaster design rests on — someone at the court opens a link on a phone and
+presses Start. So the phone publishes over **WHIP** and viewers subscribe over
+**WHEP**: WebRTC end to end.
+
+That turned out better than the plan it replaced. HLS would have added 5–15
+seconds of delay; WHEP stays under 500 ms, which for a sport scored point by
+point matters more than it first appears (see 6f).
+
+Three consequences, all accepted deliberately:
+
+- **No recording**, and therefore **no storage billed** — Cloudflare does not
+  record WebRTC broadcasts at all.
+- **No viewer count.** Cloudflare reports none for WebRTC, and the broadcast
+  screen shows the delivery path instead. Inventing a number would be worse than
+  showing none — and unlike the mesh, where the count is a warning about the
+  phone's uplink, here it would not mean anything actionable.
+- **No simulcast/restream** to YouTube or similar.
+
+### Why not Jitsi, or a self-hosted SFU
+
+Jitsi Videobridge, mediasoup and LiveKit all solve the fan-out problem — they
+are SFUs, which is the same shape as what Cloudflare provides. They were not
+chosen because every one of them means operating a publicly reachable server:
+provisioning it, scaling it, patching it, and keeping it up on match day. Jitsi
+in particular is built for many-to-many conferences rather than one-to-many
+broadcast, and its own live-streaming path exports via RTMP to YouTube, which
+puts the HLS delay straight back.
+
+The trade is real, not free: this couples internet delivery to one vendor. The
+mesh fallback is what keeps that from being a single point of failure.
+
+### How the pieces fit
+
+The awkward part is that the court-side phone can reach both the venue's LAN
+server and the internet, while an internet viewer can reach **only** Firestore.
+So the routing information travels with the presence document that already
+exists:
+
+```
+GET /api/stream-input/:courtId   (LAN only)  -> { publishUrl, playbackUrl }
+      |                                             |
+      | phone publishes here (WHIP)                 | phone writes this to
+      v                                             v  streams/{courtId}.whepUrl
+  Cloudflare live input  ------ fans out ------>  viewers subscribe (WHEP)
+```
+
+`streams/{courtId}` gains one field, `whepUrl`. A viewer that finds it plays
+from Cloudflare; a viewer that does not falls back to the mesh, unchanged. The
+mesh path writes `whepUrl: null` on every announce, so a court that used
+Cloudflare last time cannot strand viewers on a stream it is no longer feeding.
+
+### 🔒 Security
+
+- **`publishUrl` is a credential.** Cloudflare's words: "the broadcast secret is
+  part of this URL, so treat it like a stream key." It is served only by the
+  LAN-only server and is **never** written to Firestore, where the rules make it
+  world-readable. There is a regression test asserting exactly that.
+- **`whepUrl` is validated on the way in.** `streams/{courtId}` is
+  world-_writable_ (a viewer must be able to write its own SDP answer, and there
+  are no accounts to scope that to), so a stranger who knew a court id could
+  otherwise plant a URL there and point every viewer's WebRTC session at a host
+  of their choosing. The public viewer accepts a playback URL only over `https`
+  on `*.cloudflarestream.com`; anything else is ignored and the mesh is used.
+- The **Cloudflare API token** can create and delete live inputs across the whole
+  account, so it stays in `.env` and never crosses the wire — same discipline as
+  the TURN key, including never logging a response body that could echo it back.
+
+### Live inputs are adopted, not recreated
+
+One live input per court, reused for every match on it, tagged with
+`meta.courtsideCourtId`. On a cache miss the server **lists** the account's
+inputs and adopts the one already tagged for that court before creating
+anything. Without that, every restart of the desktop app would leave another
+orphaned input behind in the Cloudflare account.
+
+### Reconnection
+
+WHIP has none of its own: a dropped session simply stops transmitting. On a
+phone on venue wifi that is a matter of when, not if — and unlike the mesh,
+where each viewer reconnects independently, here one dropped upload takes
+_every_ viewer down at once. So `cloudflare-broadcast.ts` watches the peer
+connection and re-publishes on a capped backoff (2s, 5s, 10s, 20s), re-announcing
+presence each time it succeeds. The broadcast screen says "Reconnecting to the
+internet…" while it is down, rather than showing a confident "live" while
+nothing is reaching Cloudflare.
+
+### Files
+
+| File                                                    | Role                                       |
+| ------------------------------------------------------- | ------------------------------------------ |
+| `packages/server/src/integrations/cloudflare-stream.ts` | creates/adopts the per-court live input    |
+| `packages/server/src/routes/stream-input.ts`            | `GET /api/stream-input/:courtId`           |
+| `packages/client/src/lib/whip-client.ts`                | WHIP publish (protocol only)               |
+| `packages/client/src/lib/cloudflare-stream.ts`          | asks the LAN server for the court's input  |
+| `packages/client/src/lib/cloudflare-broadcast.ts`       | publish + presence + reconnect             |
+| `packages/client/src/lib/useCameraBroadcast.ts`         | picks Cloudflare, else the mesh            |
+| `public-viewer/index.html`                              | WHEP playback, and the delay queue from 6f |
+
+## 6f. ✅ Keeping the score in step with the picture
+
+### The bug this prevents
+
+The score and the video reach a viewer by completely unrelated routes: the score
+is a Firestore document write, a few hundred milliseconds behind the umpire's
+tap; the video is a media stream carrying whatever the network and the jitter
+buffer add. The score is almost always the faster of the two.
+
+The result is a page that **spoils its own video**: the scoreboard ticks over
+before the viewer sees the rally that won the point. It is not a crash and no
+test catches it, but it is the difference between watching a match and watching
+a replay of one you already know the result of.
+
+This mattered enough to fix here, and it would have mattered far more had the
+HLS plan survived — a 10-second picture behind an instant scoreboard is not
+usable at all.
+
+### What shipped
+
+The public viewer holds each score update back by roughly how far behind the
+picture is. The delay is **measured, not guessed**: WebRTC reports
+`jitterBufferDelay / jitterBufferEmittedCount` (how long a frame waits before it
+is played — the largest and most variable part of the lag) and the candidate
+pair's `currentRoundTripTime`. It is re-measured every 3 seconds, because the
+jitter buffer grows and shrinks over the course of a match.
+
+Two details that are easy to get wrong:
+
+- **Only while video is actually on screen.** A viewer watching the scoreboard
+  alone — video never started, or the court is not transmitting — has nothing to
+  stay in step with, and delaying their score would be pure loss. When the video
+  stops, everything held back is flushed immediately, so the scoreboard never
+  looks frozen.
+- **The Cloudflare path measures short.** Round-trip time there is this browser
+  to Cloudflare's edge; the phone's own upload into Cloudflare is invisible from
+  the viewer. A fixed `CLOUDFLARE_INGEST_ESTIMATE_MS` allowance is added on that
+  path, and none on the mesh, where the far end _is_ the phone.
+
+Capped at 6 seconds whatever the stats claim, and seeded with a 500 ms default
+for the moment between the picture appearing and the first measurement — the
+points scored right then are the ones most likely to be spoiled, because the
+viewer has only just started watching.
+
 ## 7. Configuration required
 
 Everything needed to stand this up on a fresh machine or a new Firebase project.
@@ -647,6 +831,112 @@ The API token is a long-term secret that mints unlimited credentials. It lives
 in `.env` (gitignored), never in a client bundle, and is never written to a log
 — including when Cloudflare echoes the request back in an error body, which
 there is a regression test for.
+
+### 7.2c Cloudflare Stream — one-time setup
+
+Needed only to serve more than a handful of internet viewers (see 6e). Without
+it the app falls back to the 5-viewer peer mesh; LAN streaming never touches it.
+
+1. Same Cloudflare account as 7.2b. Dashboard → **Stream**. Stream is a paid
+   product — there is no free tier — so a subscription must be active on the
+   account before live inputs can be created.
+2. Create an API token with the **Stream** permission set to **Edit**
+   (the API reference calls the same grant `Stream Write`).
+3. Copy the **Account ID** from any dashboard page's right-hand sidebar.
+4. Put both in `packages/server/.env`:
+
+   ```
+   CLOUDFLARE_ACCOUNT_ID=<account id>
+   CLOUDFLARE_STREAM_API_TOKEN=<token>
+   ```
+
+   Both are required together; either one alone leaves the feature off.
+
+5. Restart the desktop app, then confirm:
+
+   ```bash
+   curl -s http://localhost:3000/api/stream-input/<courtId>
+   ```
+
+   should report `"configured":true` with a `publishUrl` and `playbackUrl` on
+   `customer-<code>.cloudflarestream.com`. The first call for a court creates its
+   live input, so it is slower than later ones.
+
+**Pricing — two parts, and the first one surprises people:**
+
+1. **A $5/month floor you cannot avoid.** Stream has no pay-per-use-only plan.
+   Activating it forces you through a "Configure storage" screen that sells
+   storage in $5 blocks of 1,000 minutes, and that purchase is what switches the
+   product on.
+
+   **This app never uses a single minute of it.** Cloudflare cannot record
+   WebRTC broadcasts, and `recording.mode` is set to `off` explicitly, so the
+   block stays permanently empty — treat the $5 as an activation fee, and leave
+   the quantity at the minimum of 1. Raising it buys more of something nothing
+   will ever write to.
+
+2. **$1 per 1,000 minutes delivered**, on actual usage. Ingest and encoding are
+   free. In practice: a one-hour match watched by 30 people is 1,800
+   viewer-minutes, about **$1.80**; a full eight-hour tournament day at that
+   audience is roughly **$14**.
+
+So a month with no matches still costs $5, and a month with one busy tournament
+day costs about $19. Weigh that against the free peer mesh, which serves five
+viewers for nothing beyond TURN bandwidth — see 7.2d for switching between them
+without touching the venue machine.
+
+⚠️ **Cloudflare began billing WebRTC delivery on 15 October 2026.** Before that
+date WHEP delivery was free, so any cost estimate taken from an earlier run of
+this feature is not comparable.
+
+The API token can create and delete live inputs across the whole account. It
+lives in `.env` (gitignored), never in a client bundle, and is never written to
+a log — including when Cloudflare echoes the request back in an error body,
+which there is a regression test for.
+
+### 7.2d The remote off-switch
+
+Cloudflare Stream is the only part of this app billed per minute delivered, and
+the machine running the server sits on a venue LAN nobody can reach from
+outside. So the off-switch lives somewhere reachable from a phone.
+
+In the Firebase console, create:
+
+```
+config/streaming  ->  { cloudflareStreamEnabled: false }
+```
+
+The next broadcast started on any court uses the free peer mesh instead.
+Setting it back to `true`, or deleting the document, restores Cloudflare.
+
+- **Default is on.** A missing document, a missing field, a value that is not a
+  boolean, no Firebase configured at all, or a failed or slow read — all mean
+  "enabled". The switch exists to turn a working feature off deliberately; a
+  Firestore hiccup must never silently downgrade every court to five viewers.
+  Only an explicit `false` disables it.
+- **Takes effect on the next broadcast**, not mid-transmission. The flag is read
+  once when a court starts transmitting — one document read per match.
+- **Nothing is spent while it is off.** The flag is checked _before_ the live
+  input is fetched, so a disabled feature makes no Cloudflare API call and
+  cannot create a new live input on an account you have just decided to stop
+  spending on.
+- **No security rule is needed.** It is read by the Admin SDK, which bypasses
+  rules entirely, so the catch-all `allow read, write: if false` already denies
+  every client both. Only the Firebase console can change it — unlike
+  `streams/{courtId}`, which has to stay world-writable for signalling.
+- **Deliberately not in the admin dashboard.** This is an operator decision
+  about billing, not a match-day setting, and putting it on a screen anyone at
+  the venue can open invites it being toggled by accident.
+
+Confirm which way it is set:
+
+```bash
+curl -s http://localhost:3000/api/stream-input/<courtId>
+```
+
+`enabled` is reported separately from `configured` on purpose: "the operator
+turned this off" and "this was never set up" both fall back to the mesh, but
+only one of them is worth investigating.
 
 ### 7.3 Repo-level Firebase config
 
@@ -987,13 +1277,25 @@ work — see HANDOFF.md's "player roster import" section.
 `FIREBASE_PROJECT_ID`, `FIREBASE_PRIVATE_KEY`, `FIREBASE_CLIENT_EMAIL` (all three
 required by `cert()`), plus optional `FIREBASE_PRIVATE_KEY_ID`,
 `FIREBASE_CLIENT_ID`, and `CLOUDFLARE_TURN_KEY_ID` / `CLOUDFLARE_TURN_API_TOKEN`
-(both required together; see 7.2b). Never commit these.
+(both required together; see 7.2b), and `CLOUDFLARE_ACCOUNT_ID` /
+`CLOUDFLARE_STREAM_API_TOKEN` (both required together; see 7.2c). Never commit
+these.
 
 ### Firestore
 
 `matches/{courtId}` — one document per court, written by the server on every
 score change, world-readable, client-writes denied. Payload shape is
 `PublicScoreboard` in `cloud-sync.ts`.
+
+`config/streaming` — `{ cloudflareStreamEnabled: boolean }`, the remote
+off-switch for Cloudflare Stream (see 7.2d). Server-only: written by hand in the
+Firebase console, read by the Admin SDK, denied to every client by the
+catch-all rule.
+
+`streams/{courtId}` — presence for the court's broadcast: `live`, `paused`, and
+`whepUrl` (the Cloudflare playback URL, or `null` when the court is using the
+peer mesh). World-readable _and_ world-writable, which is why the viewer
+validates `whepUrl` before using it — see 6e.
 
 ### Links
 

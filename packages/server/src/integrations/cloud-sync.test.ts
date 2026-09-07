@@ -243,3 +243,33 @@ describe('syncScoreToCloud', () => {
     expect(errorLog).toHaveBeenCalled();
   });
 });
+
+describe('getCloudDb', () => {
+  it('hands out the Firestore handle once initialization has succeeded', async () => {
+    Object.assign(process.env, CREDS);
+    const mod = await loadModule();
+    mod.initializeCloudServices();
+
+    // Other integrations read their own remote configuration through this
+    // rather than each re-initialising the Admin SDK.
+    expect(mod.getCloudDb()).toBeDefined();
+  });
+
+  it('is undefined when cloud sync was never configured', async () => {
+    delete process.env.FIREBASE_PROJECT_ID;
+    delete process.env.FIREBASE_PRIVATE_KEY;
+    delete process.env.FIREBASE_CLIENT_EMAIL;
+    const mod = await loadModule();
+    mod.initializeCloudServices();
+
+    // The normal state for a venue running purely on the LAN — callers must
+    // treat it as "no cloud" and carry on, never as an error.
+    expect(mod.getCloudDb()).toBeUndefined();
+  });
+
+  it('is undefined before initialization has been attempted at all', async () => {
+    const mod = await loadModule();
+
+    expect(mod.getCloudDb()).toBeUndefined();
+  });
+});

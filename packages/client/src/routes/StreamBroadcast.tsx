@@ -28,6 +28,8 @@ export function StreamBroadcast() {
     errorMessage,
     autoStopNotice,
     internetViewers,
+    internetMode,
+    internetConnected,
     stream,
     start,
     togglePause,
@@ -91,13 +93,28 @@ export function StreamBroadcast() {
 
       <p className="broadcast-status" role="status">
         Status: {STATUS_LABELS[status]}
-        {isLiveOrPaused && (
+        {/* What the internet audience costs this phone differs completely
+            between the two paths, so this reports the path rather than one
+            number that would mean different things. */}
+        {isLiveOrPaused && internetMode === 'mesh' && (
           <>
             {' · '}
             {/* Each internet viewer is a separate encoded upload from this
                 phone, so this number is the thing to watch if the picture
                 starts degrading — not a vanity counter. */}
             🌐 {internetViewers} internet viewer{internetViewers === 1 ? '' : 's'}
+          </>
+        )}
+        {isLiveOrPaused && internetMode === 'cloud' && (
+          <>
+            {' · '}
+            {/* No viewer count: Cloudflare reports none for WebRTC, and it
+                would not be the useful number anyway — this upload costs the
+                same whatever the audience. What does matter is whether the
+                single upload is still up. */}
+            {internetConnected
+              ? '🌐 Streaming to the internet'
+              : '🌐 Reconnecting to the internet…'}
           </>
         )}
       </p>

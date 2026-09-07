@@ -12,6 +12,7 @@ import { tournamentsRouter } from './routes/tournaments.js';
 import { tournamentPlayersRouter } from './routes/tournament-players.js';
 import { umpiresRouter } from './routes/umpires.js';
 import { turnRouter } from './routes/turn.js';
+import { streamInputRouter } from './routes/stream-input.js';
 import { localCaRouter } from './routes/local-ca.js';
 import { configRouter } from './routes/config.js';
 import { registerSocketHandlers } from './sockets/index.js';
@@ -56,6 +57,7 @@ export function createApp(options: CreateAppOptions = {}): CourtsideApp {
   app.use('/api', tournamentPlayersRouter);
   app.use('/api', umpiresRouter);
   app.use('/api', turnRouter);
+  app.use('/api', streamInputRouter);
   app.use('/api', localCaRouter);
   app.use('/api', configRouter);
 

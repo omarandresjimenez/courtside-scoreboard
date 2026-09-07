@@ -55,6 +55,18 @@ export function initializeCloudServices() {
 }
 
 /**
+ * The Firestore handle, or undefined when cloud sync is not configured.
+ *
+ * Exposed so other integrations can read their own remote configuration
+ * without each one re-initialising the Admin SDK. Callers must treat
+ * `undefined` as "no cloud" and carry on — it is the normal state for a venue
+ * running purely on the LAN.
+ */
+export function getCloudDb(): Firestore | undefined {
+  return isInitialized ? db : undefined;
+}
+
+/**
  * The public projection of a match — what a Firestore document keyed by court
  * is allowed to contain.
  *

@@ -28,6 +28,10 @@ function broadcast(overrides: Partial<CameraBroadcast> = {}): CameraBroadcast {
     errorMessage: null,
     autoStopNotice: null,
     internetViewers: 0,
+    // The peer mesh is what a court without Cloudflare configured uses, so it
+    // is the right default for the cases that predate the Cloudflare path.
+    internetMode: 'mesh',
+    internetConnected: true,
     stream: null,
     ...actions,
     ...overrides,
@@ -165,6 +169,35 @@ describe('StreamBroadcast', () => {
   it('hides the viewer count when nothing is being transmitted', () => {
     renderAt();
     expect(screen.getByRole('status')).not.toHaveTextContent('internet viewer');
+  });
+
+  it('reports the cloud path without a viewer count, which Cloudflare does not provide', () => {
+    mockUseCameraBroadcast.mockReturnValue(
+      broadcast({ status: 'live', internetMode: 'cloud', internetViewers: 0 }),
+    );
+    renderAt();
+
+    expect(screen.getByRole('status')).toHaveTextContent('Streaming to the internet');
+    // A "0 internet viewers" here would be a lie rather than a measurement.
+    expect(screen.getByRole('status')).not.toHaveTextContent('internet viewer');
+  });
+
+  it('says it is reconnecting when the upload to Cloudflare drops', () => {
+    mockUseCameraBroadcast.mockReturnValue(
+      broadcast({ status: 'live', internetMode: 'cloud', internetConnected: false }),
+    );
+    renderAt();
+
+    expect(screen.getByRole('status')).toHaveTextContent('Reconnecting to the internet');
+  });
+
+  it('shows no internet path at all when there is none', () => {
+    mockUseCameraBroadcast.mockReturnValue(broadcast({ status: 'live', internetMode: null }));
+    renderAt();
+
+    const status = screen.getByRole('status');
+    expect(status).not.toHaveTextContent('internet viewer');
+    expect(status).not.toHaveTextContent('Streaming to the internet');
   });
 
   it('broadcasts for the court in the URL', () => {

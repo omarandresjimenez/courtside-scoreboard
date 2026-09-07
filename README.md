@@ -16,8 +16,14 @@ across restarts — see docs/STREAMING_UPGRADE.md section 7.6. The broadcast lin
 one stable address per court (found on that court's row in the admin
 dashboard, not regenerated per match), and once a phone has granted camera
 permission once, it starts and stops transmitting on its own as each match on
-that court starts and finishes — see docs/STREAMING_UPGRADE.md section 9.4. See
-[docs/STREAMING_UPGRADE.md](docs/STREAMING_UPGRADE.md) for how that works and what it
+that court starts and finishes — see docs/STREAMING_UPGRADE.md section 9.4.
+Internet viewers are served either by Cloudflare Stream, which takes one upload
+from the phone and fans it out to any number of viewers, or — with no Cloudflare
+account configured — by a direct peer-to-peer mesh capped at five viewers, since
+each one costs the phone a separate upload. The public page also holds the score
+back to match the video's own delay, so the scoreboard cannot spoil the rally you
+are still watching. See
+[docs/STREAMING_UPGRADE.md](docs/STREAMING_UPGRADE.md) for how all of that works and what it
 needs; [docs/HANDOFF.md](docs/HANDOFF.md) is the "how it actually works and why" doc
 for everything else, and [docs/architecture.html](docs/architecture.html) is a
 visual tour of how every piece fits together.
@@ -26,6 +32,154 @@ The full design spec (architecture, scoring rules, screens, data model,
 event contract) lives in the private working doc this project was
 scaffolded from — see your Courtside Scoreboard artifact for the complete
 reasoning behind every decision below.
+
+## 🧪 About this branch — `streaming-clouflare-subscription-token`
+
+**Status: complete and tested, but parked pending a cost decision. Not merged.**
+
+### Why it exists
+
+Internet video on `develop` is a WebRTC **mesh**: the court-side phone opens a
+separate peer connection, with its own encoder output, for every viewer. That is
+why viewers are capped at five. It is not a safety margin — a phone uplink is
+5–15 Mbps, a viewer costs ~2.6 Mbps, and the sixth viewer does not merely fail,
+it degrades the picture for the five already watching and for the LAN screens
+sharing the same radio.
+
+Serving dozens of viewers is a different shape of problem. The upload has to
+happen **once**. This branch does that with Cloudflare Stream Live.
+
+### What it adds
+
+- **One upload, unlimited viewers.** The phone publishes a single stream over
+  WHIP; Cloudflare fans it out over WHEP from its own edge. Latency stays under
+  500 ms — better than the 5–15 s an HLS design would have cost.
+- **The mesh is kept as the fallback**, not replaced. With no Cloudflare
+  configured the app behaves exactly as it does on `develop`. That path needs no
+  account and no billing, which is the case this app is built to survive.
+- **The score now waits for the video.** The two arrive by unrelated routes and
+  the score almost always wins, so the page used to spoil its own rallies — the
+  point appeared before you saw it won. Score updates are held back by the
+  video's own measured delay (from WebRTC jitter-buffer and RTT stats), but only
+  while video is actually on screen.
+- **A remote off-switch**, so the paid path can be turned off from a phone
+  without touching the venue machine. See "Turning it off" below.
+
+### What it costs
+
+Two parts, and the first one is easy to miss:
+
+|                                |                                                                      |
+| ------------------------------ | -------------------------------------------------------------------- |
+| Cloudflare Stream subscription | **$5/month**, unavoidable, and **never used** by this app            |
+| Delivery                       | **$1 per 1,000 minutes** — ~$1.80 for a 1-hour match with 30 viewers |
+
+Stream has no pay-per-use-only plan. Activating it forces you through a
+"Configure storage" screen selling storage in $5 blocks of 1,000 minutes, and
+that purchase is what switches the product on. **This app never writes a single
+minute of it** — Cloudflare cannot record WebRTC broadcasts, and `recording.mode`
+is set to `off` explicitly — so treat it as an activation fee and leave the
+quantity at the minimum of 1.
+
+So: a month with no matches still costs $5; a month with one busy tournament day
+is about $19. **That is the open decision this branch is parked on.**
+
+### Configuring it
+
+Everything below is optional. Skip it entirely and the app runs exactly as it
+does on `develop`, on the five-viewer mesh.
+
+1. **Subscribe to Cloudflare Stream.** Same account as the existing TURN setup —
+   no new account, no domain needed. Dashboard → Stream → check **Cloudflare
+   Stream**, quantity **1**, Continue.
+2. **Create an API token** with **Stream → Edit**. The existing
+   `CLOUDFLARE_TURN_API_TOKEN` will _not_ work — it is scoped to TURN.
+3. **Copy your Account ID** from the right-hand sidebar of any dashboard page.
+   (This is not the TURN _Key ID_; they are different things.)
+4. **Add both to `packages/server/.env`:**
+
+   ```
+   CLOUDFLARE_ACCOUNT_ID=<account id>
+   CLOUDFLARE_STREAM_API_TOKEN=<Stream:Edit token>
+   ```
+
+   Both are required together — either alone leaves the feature off.
+
+5. **Restart and verify:**
+
+   ```bash
+   curl -s http://localhost:3000/api/stream-input/<courtId>
+   ```
+
+   Expect `"configured":true` with a `publishUrl` and `playbackUrl` on
+   `customer-<code>.cloudflarestream.com`. The first call for a court is slower —
+   that is it creating the court's live input. Before configuring, the same call
+   returns `{"configured":false,"enabled":true,...}`, which is the healthy
+   "falling back to the mesh" answer, not an error.
+
+### Running it end to end
+
+```bash
+npm install
+npm run build --workspace packages/client
+npm run start --workspace packages/server
+```
+
+Then, as with any broadcast on this app: open the court's broadcast link on a
+phone (the QR code is on that court's row in the admin dashboard), press
+**Start**, and open the public viewer link on another device.
+
+The broadcast screen tells you which path it chose:
+
+- **"🌐 Streaming to the internet"** — Cloudflare. No viewer count, because
+  Cloudflare reports none for WebRTC.
+- **"🌐 N internet viewers"** — the peer mesh. That number is a warning about
+  the phone's uplink, not a vanity counter.
+- **"🌐 Reconnecting to the internet…"** — the single upload dropped and is being
+  re-published on a backoff.
+
+Add `?debug=1` to the public viewer URL for an on-page connection log, which
+reports whether delivery is `cloudflare` or `peer-to-peer`.
+
+### Turning it off
+
+The off-switch is one field in Firestore, edited by hand in the Firebase console:
+
+```
+config/streaming  ->  { cloudflareStreamEnabled: false }
+```
+
+The next broadcast started on any court uses the free mesh instead. It is
+deliberately not in the admin dashboard: this is an operator decision about
+billing, not a match-day setting.
+
+- **Defaults to on.** Missing document, missing field, non-boolean value, no
+  Firebase configured, or a failed/slow read all mean "enabled". Only an explicit
+  `false` disables it — a Firestore hiccup must never silently drop every court
+  to five viewers.
+- **Takes effect on the next broadcast**, not mid-transmission.
+- **Nothing is spent while off.** The flag is checked _before_ any Cloudflare
+  call, so it cannot leave new live inputs being created on an account you have
+  stopped paying for.
+- **It controls usage, not billing.** The $5/month continues until you cancel
+  the subscription in Cloudflare.
+
+### What is verified, and what is not
+
+Verified: 919 tests pass (90 new, 100% coverage on every new file), typecheck
+clean, lint and formatting unchanged from the base branch. The endpoint was
+smoke-tested against a live server, including the off-switch defaulting to
+enabled against real Firestore with no flag document present.
+
+**Not verified:** the configured Cloudflare path has never run against real
+credentials, because Stream has no free tier. Everything up to "Cloudflare
+accepts the credentials" is tested; the actual WHIP publish and WHEP playback
+need a real subscription. **That is the first thing to do if this branch is
+picked up.**
+
+Full detail: [docs/STREAMING_UPGRADE.md](docs/STREAMING_UPGRADE.md) sections 6e
+(Cloudflare Stream), 6f (score/video sync), 7.2c (setup) and 7.2d (the
+off-switch).
 
 ## Structure
 
@@ -169,7 +323,7 @@ npm run typecheck    # tsc --noEmit across every package
 npm test             # Jest --coverage in every package
 ```
 
-829 tests across the three packages (467 client / 220 server / 142
+919 tests across the three packages (523 client / 254 server / 142
 shared). Each package enforces its own coverage floor in its
 `jest.config.cjs` (`coverageThreshold`), ratcheted to what its suite
 actually achieves rather than a round number:

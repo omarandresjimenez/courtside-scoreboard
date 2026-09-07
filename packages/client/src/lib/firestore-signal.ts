@@ -67,7 +67,9 @@ export interface FirestoreSignalConfig {
   appId: string;
 }
 
-function appFor(config: FirestoreSignalConfig): FirebaseApp {
+/** Shared with the Cloudflare path, which writes presence to the same
+ *  `streams/{courtId}` document this module owns. */
+export function appFor(config: FirestoreSignalConfig): FirebaseApp {
   // Reuse the default app if something else already initialised it, rather
   // than throwing on a duplicate.
   return getApps()[0] ?? initializeApp(config);
@@ -119,13 +121,21 @@ export function broadcastToInternet(
   // `paused` is reset on both start and stop so a broadcast never inherits a
   // stale paused flag from a previous session on this court — the same reason
   // the Socket.io path clears pausedByCourtId when a broadcaster connects.
+  //
+  // `whepUrl: null` is written explicitly on every announce. A court that
+  // broadcast through Cloudflare last time left a playback URL in this
+  // document, and a viewer that finds one prefers it over the mesh — so
+  // failing to clear it would send every viewer to a stream this broadcast is
+  // not publishing to.
   const announce = (live: boolean) =>
-    setDoc(streamDoc, { live, paused: false, updatedAt: serverTimestamp() }, { merge: true }).catch(
-      () => {
-        // Presence is a convenience for the viewer's placeholder text, not a
-        // correctness requirement — a failure here must not stop the broadcast.
-      },
-    );
+    setDoc(
+      streamDoc,
+      { live, paused: false, whepUrl: null, updatedAt: serverTimestamp() },
+      { merge: true },
+    ).catch(() => {
+      // Presence is a convenience for the viewer's placeholder text, not a
+      // correctness requirement — a failure here must not stop the broadcast.
+    });
   void announce(true);
 
   function report() {

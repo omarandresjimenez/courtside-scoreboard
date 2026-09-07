@@ -677,6 +677,12 @@
               <span class="node-summary">The link anyone on the internet can open.</span>
               <span class="node-detail-btn">Details</span>
             </button>
+            <button class="node" data-lane="cloud" data-node="cf-stream" id="node-cf-stream">
+              <span class="node-icon">📡</span>
+              <span class="node-title">Cloudflare Stream</span>
+              <span class="node-summary">Takes one upload, fans it out to every viewer.</span>
+              <span class="node-detail-btn">Details</span>
+            </button>
             <button class="node" data-lane="cloud" data-node="turn" id="node-turn">
               <span class="node-icon">🔁</span>
               <span class="node-title">Cloudflare TURN</span>
@@ -692,7 +698,7 @@
           <span class="chevron">▸</span>
           How a video stream actually reaches someone across the world
           <span class="subtitle"
-            >— the
+            >— the direct
             <strong>Court-side Phone → Firestore → Cloudflare TURN → Public Viewer</strong> path,
             step by step</span
           >
@@ -705,6 +711,11 @@
             open a direct peer-to-peer connection and stream video straight between them. Firestore
             is only ever used to help the two sides <em>find</em> each other; once connected, it
             never sees a single video byte.
+          </p>
+          <p class="walkthrough-intro">
+            This is the <strong>fallback</strong> path — what runs when no Cloudflare Stream account
+            is configured. It needs no account and no billing, which is exactly why it was kept, but
+            it does not scale past a handful of viewers. The next section covers the path that does.
           </p>
 
           <ol class="walkthrough-steps">
@@ -811,9 +822,10 @@
             <h3>The limits, on purpose</h3>
             <ul>
               <li>
-                <strong>~5 viewers, hard cap.</strong> It's a mesh, so the phone runs a separate
-                video encode per viewer. A 6th request is just refused — past that point, quality
-                degrades for everyone, including people on the LAN.
+                <strong>~5 viewers, hard cap — on this path.</strong> It's a mesh, so the phone runs
+                a separate video encode per viewer. A 6th request is just refused — past that point,
+                quality degrades for everyone, including people on the LAN. This is the ceiling the
+                Cloudflare path below exists to remove.
               </li>
               <li>
                 <strong>Abandoned viewers get cleaned up.</strong> A crashed or killed tab never
@@ -831,6 +843,170 @@
                 → still works for anyone whose network allows a direct path; only the "someone's on
                 hostile mobile-carrier NAT" case fails, with an on-page diagnostic explaining
                 exactly that instead of a generic error.
+              </li>
+            </ul>
+          </div>
+        </div>
+      </details>
+
+      <details class="walkthrough">
+        <summary>
+          <span class="chevron">▸</span>
+          Scaling past five viewers — and keeping the score honest
+          <span class="subtitle"
+            >— the <strong>Court-side Phone → Cloudflare Stream → everyone</strong> path, and why
+            the scoreboard waits</span
+          >
+        </summary>
+        <div class="walkthrough-body">
+          <p class="walkthrough-intro">
+            The peer-to-peer path above has one structural limit: it is a
+            <strong>mesh</strong>. Every viewer is a separate encoded upload from the same
+            court-side phone, so five viewers means five uploads on a phone uplink that is usually
+            5&ndash;15 Mbps. The sixth viewer doesn't merely fail — it degrades the picture for the
+            five already watching, and for the LAN screens sharing the same radio. No amount of
+            tuning reaches "dozens of viewers"; the upload has to happen <strong>once</strong>.
+          </p>
+
+          <ol class="walkthrough-steps">
+            <li>
+              <strong>The server creates one live input per court — and only one, ever.</strong>
+              <p>
+                On first use it asks Cloudflare for a live input and tags it with the court's id. On
+                every later start it <em>lists</em> the account's inputs and adopts the one already
+                tagged for that court. Without that, every restart of the desktop app would quietly
+                leave another orphaned input behind in the Cloudflare account.
+              </p>
+            </li>
+            <li>
+              <strong>The phone asks the venue's own server where to publish.</strong>
+              <p>
+                <code>GET /api/stream-input/:courtId</code> returns two URLs. The publish URL
+                <em>is a credential</em> — Cloudflare embeds the broadcast secret directly in it —
+                so it is served only on the LAN and never written anywhere public. The Cloudflare
+                API token itself, which could create and delete inputs across the whole account,
+                never leaves the server at all.
+              </p>
+            </li>
+            <li>
+              <strong>The phone publishes once, over WHIP.</strong>
+              <p>
+                WHIP is the entire protocol in one HTTP request: POST an SDP offer as
+                <code>application/sdp</code>, get an SDP answer back as the response body. No SDK,
+                no signalling server, no per-viewer negotiation. From here the court's uplink
+                carries exactly one stream whether two people are watching or two hundred.
+              </p>
+            </li>
+            <li>
+              <strong>The playback URL is published through Firestore.</strong>
+              <p>
+                This is the piece that bridges the two worlds. The phone can reach both the venue's
+                server and the internet; a viewer in another country can reach only Firestore. So
+                the phone writes the <em>playback</em> URL into the same
+                <code>streams/{courtId}</code> presence document that already carries
+                <code>live</code> and <code>paused</code>, as <code>whepUrl</code>.
+              </p>
+            </li>
+            <li>
+              <strong>The viewer subscribes over WHEP — the same handshake, reversed.</strong>
+              <p>
+                Finding a <code>whepUrl</code>, the public page POSTs its own SDP offer and plays
+                what comes back. No viewer document, no ICE exchange through Firestore, nothing to
+                occupy a slot in — Cloudflare is serving the media, not the phone. There is no fixed
+                viewer limit, and latency stays under 500&nbsp;ms.
+              </p>
+            </li>
+            <li>
+              <strong>That URL is not trusted just because it was in the document.</strong>
+              <p>
+                <code>streams/{courtId}</code> has to be world-<em>writable</em> — a viewer on the
+                fallback path must be able to write its own SDP answer there, and this app has no
+                user accounts to scope that to. So a stranger who knew a court id could otherwise
+                plant a URL and point every viewer's WebRTC session at a host of their choosing. The
+                viewer accepts a playback URL only over <code>https</code> on
+                <code>*.cloudflarestream.com</code>, and ignores anything else.
+              </p>
+            </li>
+            <li>
+              <strong>A dropped upload is re-published automatically.</strong>
+              <p>
+                WHIP has no reconnection of its own — a dropped session simply stops transmitting.
+                On a phone on venue Wi-Fi that is a matter of when, not if, and here one dropped
+                upload takes <em>every</em> viewer down at once rather than just one. So the peer
+                connection is watched and re-published on a capped backoff, and the broadcast screen
+                says "Reconnecting…" rather than showing a confident "live" while nothing is
+                actually reaching Cloudflare.
+              </p>
+            </li>
+            <li>
+              <strong>The scoreboard deliberately waits for the video to catch up.</strong>
+              <p>
+                The score and the picture arrive by unrelated routes — the score is a Firestore
+                write a few hundred milliseconds behind the umpire's tap, the video carries whatever
+                the network and the jitter buffer add. The score almost always wins that race, which
+                means the page <em>spoils its own video</em>: the point appears before the viewer
+                sees the rally that won it. So each score update is held back by roughly how far
+                behind the picture is.
+              </p>
+            </li>
+            <li>
+              <strong>That delay is measured, not guessed.</strong>
+              <p>
+                WebRTC reports how long frames sit in the jitter buffer (<code
+                  >jitterBufferDelay / jitterBufferEmittedCount</code
+                >) and what the round trip to the far end costs, which together are most of the
+                answer. It is re-measured every few seconds, because the jitter buffer grows and
+                shrinks over the course of a match. On the Cloudflare path a fixed allowance is
+                added for the phone's own upload leg, which is invisible from the viewer's side of
+                the connection.
+              </p>
+            </li>
+            <li>
+              <strong>…but only while there is video to stay in step with.</strong>
+              <p>
+                A viewer watching the scoreboard alone — video never started, or the court simply
+                isn't transmitting — has nothing to synchronise against, and delaying their score
+                would be pure loss. The delay applies only while a picture is actually on screen,
+                and everything held back is flushed the moment the video stops, so the scoreboard
+                never looks frozen.
+              </p>
+            </li>
+          </ol>
+
+          <div class="walkthrough-limits">
+            <h3>The trade-offs, on purpose</h3>
+            <ul>
+              <li>
+                <strong>WebRTC end to end, not HLS.</strong> The obvious design — publish to
+                Cloudflare, serve HLS from a CDN — is not available: Cloudflare treats WHIP ingest
+                and HLS playback as mutually exclusive, and HLS would have required RTMP or SRT
+                ingest that a browser cannot produce without a native encoder like OBS. That would
+                have destroyed the one property the whole broadcaster design rests on: someone picks
+                up a phone, opens a link, presses Start. The forced answer turned out to be the
+                better one — under 500&nbsp;ms instead of the 5&ndash;15 seconds HLS would have
+                added.
+              </li>
+              <li>
+                <strong>No recording, and no viewer count.</strong> Cloudflare does not record
+                WebRTC broadcasts, which also means this consumes no storage and incurs no storage
+                bill. It reports no viewer count either, so the broadcast screen shows the delivery
+                path instead — an invented number would be worse than none.
+              </li>
+              <li>
+                <strong>Not Jitsi, and not a self-hosted SFU.</strong> Jitsi Videobridge, mediasoup
+                and LiveKit all solve the same fan-out problem, but every one of them means running
+                a publicly reachable server: provisioning, scaling, patching, and keeping it alive
+                on match day. Jitsi is also built for many-to-many conferences rather than
+                one-to-many broadcast, and its own live-streaming path exports via RTMP to YouTube —
+                which puts the HLS delay straight back.
+              </li>
+              <li>
+                <strong>The mesh was kept, not replaced.</strong> Cloudflare Stream is a paid
+                product with no free tier, so a venue with no account still needs something that
+                works. With no Cloudflare configured the app falls back to the five-viewer
+                peer-to-peer path above, unchanged — and the presence document is explicitly cleared
+                on that path, so a court that used Cloudflare last time can't strand viewers on a
+                stream it is no longer feeding.
               </li>
             </ul>
           </div>
@@ -1029,10 +1205,21 @@
           title: 'Public Viewer (Firebase Hosting)',
           summary: 'The link anyone in the world can open to watch a match — no app, no login.',
           implementation:
-            'A plain static HTML/JS page — no build step, no framework — deployed to Firebase Hosting. Reads the live score straight from Firestore and negotiates video the same mesh-WebRTC way a LAN viewer does, just over Firestore signalling instead of Socket.io.',
+            'A plain static HTML/JS page — no build step, no framework — deployed to Firebase Hosting. Reads the live score straight from Firestore, then takes whichever video path the court is publishing on: Cloudflare when the presence document names a playback URL, and a direct peer-to-peer connection to the phone when it does not.',
           libs: ['Firebase JS SDK, loaded directly'],
           considerations:
-            'Capped at roughly 5 concurrent viewers by the mesh model itself (one peer connection per viewer, all from the same court-side phone) — a real ceiling, not a bug to fix. Auto-reconnects on a dropped connection instead of ever needing a manual page reload.',
+            "The peer-to-peer fallback is capped at roughly 5 concurrent viewers by the mesh model itself (one upload per viewer, all from the same court-side phone) — a real ceiling, not a bug to fix; the Cloudflare path has no such limit. Holds each score update back by the video's own measured delay, so the scoreboard cannot spoil a rally the viewer is still watching — but only while video is on screen, since a scoreboard-only viewer has nothing to stay in step with. Auto-reconnects on a dropped connection instead of ever needing a manual page reload.",
+        },
+        'cf-stream': {
+          icon: '📡',
+          title: 'Cloudflare Stream Live',
+          summary:
+            'The scalable internet path: the court-side phone uploads once, Cloudflare delivers to everyone.',
+          implementation:
+            "The server creates one Cloudflare live input per court (adopting the existing one on restart rather than making another) and serves its two URLs on a LAN-only route. The phone publishes over WHIP — a single HTTP POST of an SDP offer — and writes the playback URL into the court's Firestore presence document, which is how an internet viewer, who cannot reach the venue's server, finds out where to watch. Viewers subscribe over WHEP, the same handshake in reverse.",
+          libs: ['Cloudflare Stream Live', 'WHIP / WHEP — no SDK, plain fetch + RTCPeerConnection'],
+          considerations:
+            "WHIP ingest and HLS playback are mutually exclusive on Cloudflare, and HLS would have needed RTMP/SRT ingest that a browser cannot produce — so this is WebRTC end to end, which also keeps latency under 500ms instead of the 5-15s HLS would have added. Consequences: no recording (and therefore no storage bill), and no viewer count, which Cloudflare does not report for WebRTC. The publish URL embeds a broadcast secret, so it is served only on the LAN and never written to Firestore; the playback URL that is written there is validated by the viewer against Cloudflare's own domain, because that document is world-writable. WHIP has no reconnection of its own, so a dropped upload — which would take every viewer down at once — is re-published on a capped backoff. Because it is the one part of the app billed per minute delivered, it has a remote off-switch: a single Firestore field (config/streaming) the operator flips from a phone, since the venue server itself is unreachable from outside. It defaults to on in every uncertain case, and is checked before any Cloudflare call, so switching it off cannot leave new inputs being created on an account you have stopped spending on.",
         },
         turn: {
           icon: '🔁',
@@ -1092,6 +1279,9 @@
         ['node-court-broadcaster', 'node-firestore', false],
         ['node-public-viewer', 'node-firestore', false],
         ['node-public-viewer', 'node-turn', false],
+        ['node-server', 'node-cf-stream', false],
+        ['node-court-broadcaster', 'node-cf-stream', true],
+        ['node-cf-stream', 'node-public-viewer', true],
         ['node-court-broadcaster', 'node-tv-screen', true],
         ['node-court-broadcaster', 'node-public-viewer', true],
       ];

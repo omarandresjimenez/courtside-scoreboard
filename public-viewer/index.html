@@ -665,7 +665,6 @@
         );
       } else {
         const db = getFirestore(initializeApp(firebaseConfig));
-        let lastUpdate = 0;
 
         onSnapshot(
           doc(db, 'matches', courtId),
@@ -677,8 +676,7 @@
               return;
             }
             if (!lastUpdate) dbg('ok', 'score document received — Firestore read works');
-            lastUpdate = Date.now();
-            render(snap.data());
+            queueScore(snap.data());
           },
           (err) => {
             dbg('err', 'score snapshot failed', { code: err.code, message: err.message });
@@ -820,6 +818,7 @@
       const viewState = {
         live: false, // the court says it is broadcasting
         paused: false, // the court paused its camera
+        whepUrl: null, // Cloudflare playback URL, when the court publishes there
         conn: 'new', // RTCPeerConnection.connectionState
         playing: false, // we are decoding actual media
         fatal: null, // unrecoverable, e.g. signalling writes denied
@@ -827,7 +826,22 @@
       };
 
       function updateViewState(patch) {
+        const wasShowing = viewState.playing && viewState.live;
         Object.assign(viewState, patch);
+        const showing = viewState.playing && viewState.live;
+
+        if (showing && !wasShowing) {
+          // Assume the usual lag straight away. Measuring takes a few seconds,
+          // and the points scored in the meantime are the ones most likely to
+          // be spoiled — the viewer has just started watching.
+          if (videoLatencyMs <= 0) videoLatencyMs = DEFAULT_VIDEO_LATENCY_MS;
+        }
+        if (wasShowing && !showing) {
+          // Nothing left to stay in step with, and anything still held back is
+          // now just a scoreboard that looks frozen.
+          videoLatencyMs = 0;
+          flushScores();
+        }
         renderVideoState();
       }
 
@@ -879,12 +893,194 @@
         return setVideoMsg('Connecting to the court camera…');
       }
 
+      /* ------------------------------------------------------------------
+       * Keeping the score in step with the picture.
+       *
+       * The two arrive by completely separate routes: the score is a Firestore
+       * document write (a few hundred ms from the umpire's tap), the video is a
+       * media stream (WebRTC playout, plus whatever the network adds). The
+       * score is almost always the faster of the two, so without this the
+       * scoreboard ticks over *before* the viewer sees the rally that won the
+       * point — it spoils its own video.
+       *
+       * The fix is to hold each score update back by roughly how far behind the
+       * video is, and the delay is measured rather than guessed: WebRTC reports
+       * how long frames sit in the jitter buffer and what the round trip to the
+       * far end costs, which together are most of the answer.
+       *
+       * Only while video is actually on screen. A viewer watching the scoreboard
+       * alone — no video started, or the court is not transmitting — has nothing
+       * to stay in step with, and delaying their score would be pure loss.
+       * ------------------------------------------------------------------ */
+
+      /** Never hold the score back further than this, whatever the stats say. */
+      const MAX_SCORE_DELAY_MS = 6000;
+
+      /**
+       * What the stats cannot see on the Cloudflare path: the phone's own
+       * upload into Cloudflare. Round-trip time there measures this browser to
+       * Cloudflare's edge, and the ingest leg beyond it is invisible from here.
+       * An estimate is closer to the truth than counting it as zero. The peer
+       * mesh needs no such allowance — there the far end *is* the phone.
+       */
+      const CLOUDFLARE_INGEST_ESTIMATE_MS = 250;
+
+      /**
+       * Starting assumption, used for the moment between the picture appearing
+       * and the first measurement. Roughly what WebRTC playout costs on a
+       * healthy connection — close enough to be better than no delay at all.
+       */
+      const DEFAULT_VIDEO_LATENCY_MS = 500;
+
+      /** How far behind live the picture currently is. 0 disables the delay. */
+      let videoLatencyMs = 0;
+      let lastUpdate = 0;
+      const scoreQueue = [];
+      let scoreTicker = null;
+
+      function applyScore(data) {
+        lastUpdate = Date.now();
+        render(data);
+      }
+
+      /**
+       * Show a score update once the video has caught up to it — or at once,
+       * when there is no video to stay in step with.
+       */
+      function queueScore(data) {
+        const showingVideo = viewState.playing && viewState.live;
+        if (!showingVideo || videoLatencyMs <= 0) {
+          flushScores();
+          applyScore(data);
+          return;
+        }
+        scoreQueue.push({ data, dueAt: Date.now() + videoLatencyMs });
+        if (!scoreTicker) scoreTicker = setInterval(pumpScores, 100);
+      }
+
+      function pumpScores() {
+        const now = Date.now();
+        // Only the newest due update is rendered: these documents are whole
+        // snapshots, not increments, so an older one has nothing to add.
+        let latest = null;
+        while (scoreQueue.length && scoreQueue[0].dueAt <= now) latest = scoreQueue.shift();
+        if (latest) applyScore(latest.data);
+        if (!scoreQueue.length) {
+          clearInterval(scoreTicker);
+          scoreTicker = null;
+        }
+      }
+
+      /**
+       * Show everything held back, immediately. Called when the video stops:
+       * whatever was being waited for is not coming, and a viewer left looking
+       * at a stale score would think the scoreboard had frozen.
+       */
+      function flushScores() {
+        const last = scoreQueue.pop();
+        scoreQueue.length = 0;
+        if (scoreTicker) {
+          clearInterval(scoreTicker);
+          scoreTicker = null;
+        }
+        if (last) applyScore(last.data);
+      }
+
+      /**
+       * Estimate how far the picture is behind live, from the peer's own stats.
+       *
+       * jitterBufferDelay/jitterBufferEmittedCount is the average time a frame
+       * waits before it is played, which is the largest and most variable part
+       * of the lag. Half the round trip covers the hop it travelled over.
+       */
+      function measureVideoLatency(pc, mode) {
+        return pc.getStats().then((stats) => {
+          let bufferDelay = 0;
+          let bufferCount = 0;
+          let rtt = 0;
+          stats.forEach((r) => {
+            if (r.type === 'inbound-rtp' && r.kind === 'video' && r.jitterBufferEmittedCount) {
+              bufferDelay = r.jitterBufferDelay || 0;
+              bufferCount = r.jitterBufferEmittedCount;
+            }
+            if (r.type === 'candidate-pair' && r.nominated && r.currentRoundTripTime) {
+              rtt = r.currentRoundTripTime;
+            }
+          });
+          const buffered = bufferCount ? (bufferDelay / bufferCount) * 1000 : 0;
+          const ingest = mode === 'whep' ? CLOUDFLARE_INGEST_ESTIMATE_MS : 0;
+          return Math.min(MAX_SCORE_DELAY_MS, Math.round(buffered + (rtt * 1000) / 2 + ingest));
+        });
+      }
+
+      /**
+       * Accept a Cloudflare playback URL from the stream document, or nothing.
+       *
+       * This is a trust boundary. `streams/{courtId}` is world-writable (see
+       * firestore.rules — a viewer has to be able to write its own SDP answer
+       * there, and there are no user accounts to scope that to), so a stranger
+       * who knows the court id could plant a URL here and point every viewer's
+       * WebRTC session at a host of their choosing. Restricting it to
+       * Cloudflare's own playback domain over https costs nothing and removes
+       * that. Anything else is ignored, which falls back to the peer mesh.
+       */
+      function safeWhepUrl(value) {
+        if (typeof value !== 'string' || !value) return null;
+        try {
+          const url = new URL(value);
+          const ok = url.protocol === 'https:' && url.hostname.endsWith('.cloudflarestream.com');
+          if (!ok) dbg('warn', 'ignoring a stream URL that is not a Cloudflare playback URL');
+          return ok ? url.toString() : null;
+        } catch {
+          dbg('warn', 'ignoring an unparseable stream URL');
+          return null;
+        }
+      }
+
+      /**
+       * Wait for ICE gathering so the offer we POST already carries its
+       * candidates. WHEP can trickle them afterwards with a PATCH, but sending
+       * a complete offer avoids depending on that. Capped, because gathering
+       * can hang and a slightly incomplete offer still connects.
+       */
+      function whenIceGathered(pc) {
+        if (pc.iceGatheringState === 'complete') return Promise.resolve();
+        return new Promise((resolve) => {
+          const finish = () => {
+            clearTimeout(timer);
+            pc.removeEventListener('icegatheringstatechange', onChange);
+            resolve();
+          };
+          const onChange = () => {
+            if (pc.iceGatheringState === 'complete') finish();
+          };
+          const timer = setTimeout(finish, 2000);
+          pc.addEventListener('icegatheringstatechange', onChange);
+        });
+      }
+
       async function watchVideo(db, courtId) {
         const stage = $('stage');
         const video = $('video');
         stage.hidden = false;
         wireFullscreen(stage);
         keepScreenAwake();
+
+        // Re-measured continuously rather than once. The jitter buffer grows
+        // and shrinks with the network, so a delay fixed at connection time
+        // would drift out of step over the course of a match.
+        setInterval(() => {
+          const current = attempt;
+          if (!current || !(viewState.playing && viewState.live)) return;
+          measureVideoLatency(current.pc, current.mode)
+            .then((ms) => {
+              videoLatencyMs = ms;
+            })
+            .catch(() => {
+              // Stats are a refinement, never a requirement — keep the last
+              // known delay rather than dropping back to none.
+            });
+        }, 3000);
 
         const streamDoc = doc(db, 'streams', courtId);
 
@@ -914,7 +1110,7 @@
 
         function teardownAttempt() {
           if (!attempt) return;
-          const { pc, unsubs, viewerDoc, answerCandidates } = attempt;
+          const { pc, unsubs, viewerDoc, answerCandidates, whepSession } = attempt;
           attempt = null;
           unsubs.forEach((u) => {
             try {
@@ -928,11 +1124,19 @@
           } catch {
             /* already closed */
           }
-          // Free the broadcaster's slot rather than leaving a corpse behind.
-          getDocs(answerCandidates)
-            .then((s) => s.forEach((d) => deleteDoc(d.ref).catch(() => {})))
-            .catch(() => {});
-          deleteDoc(viewerDoc).catch(() => {});
+          // Cloudflare path: end the session explicitly instead of leaving it
+          // to time out. keepalive, because this commonly runs as the tab closes.
+          if (whepSession) {
+            fetch(whepSession, { method: 'DELETE', keepalive: true }).catch(() => {});
+          }
+          // Peer-mesh path: free the broadcaster's slot rather than leaving a
+          // corpse behind. Absent on the Cloudflare path, which registers nothing.
+          if (answerCandidates) {
+            getDocs(answerCandidates)
+              .then((s) => s.forEach((d) => deleteDoc(d.ref).catch(() => {})))
+              .catch(() => {});
+          }
+          if (viewerDoc) deleteDoc(viewerDoc).catch(() => {});
         }
 
         // Reconnection. Observed failure this fixes: the broadcaster's tab was
@@ -973,7 +1177,115 @@
           retryTimer = null;
         }
 
-        async function connectAttempt(reason) {
+        /**
+         * Connect by whichever path the court is actually publishing on.
+         *
+         * Cloudflare when the stream document names a playback URL, the peer
+         * mesh otherwise. The court decides — the phone publishes to Cloudflare
+         * when the venue's server has it configured and falls back to the mesh
+         * when it does not — so this follows rather than choosing.
+         */
+        function connectAttempt(reason) {
+          return viewState.whepUrl
+            ? connectViaWhep(reason, viewState.whepUrl)
+            : connectViaMesh(reason);
+        }
+
+        /**
+         * WHEP — the Cloudflare path. One HTTP request: POST an SDP offer,
+         * get an answer back.
+         *
+         * Nothing is signalled through Firestore here and no viewer document is
+         * registered, because Cloudflare is serving the media rather than the
+         * phone. That is the whole point: the court's uplink carries one stream
+         * no matter how many people are watching, so there is no viewer cap and
+         * nothing for a viewer to occupy a slot in.
+         *
+         * No iceServers either. The far end is a public host, so there is
+         * nothing for STUN to discover and no NAT to relay around — which also
+         * means none of the TURN diagnostics below apply to this path.
+         */
+        async function connectViaWhep(reason, whepUrl) {
+          teardownAttempt();
+          updateViewState({ conn: 'new', playing: false, fatal: null });
+
+          const pc = new RTCPeerConnection();
+          const remote = new MediaStream();
+          video.srcObject = remote;
+
+          // recvonly, and declared up front: the offer has to advertise the
+          // media we want before Cloudflare has anything to answer with.
+          pc.addTransceiver('video', { direction: 'recvonly' });
+          pc.addTransceiver('audio', { direction: 'recvonly' });
+
+          const unsubs = [];
+          attempt = { pc, unsubs, mode: 'whep' };
+
+          dbg('info', `connection attempt via Cloudflare (${reason})`);
+
+          pc.ontrack = (event) => {
+            dbg('ok', 'media track received', { kind: event.track.kind });
+            remote.addTrack(event.track);
+            updateViewState({ playing: true });
+            // muted + explicit play(): browsers block autoplay of unmuted media
+            // without a user gesture, and a viewer arriving from a shared link
+            // has made none.
+            video.play().catch((e) => console.warn('autoplay blocked:', e));
+          };
+
+          pc.onconnectionstatechange = () => {
+            const state = pc.connectionState;
+            dbg(
+              state === 'failed' ? 'err' : state === 'connected' ? 'ok' : 'info',
+              `connectionState -> ${state}`,
+            );
+            if (state === 'connected') {
+              retryCount = 0;
+              cancelRetry();
+              updateViewState({ exhausted: false });
+            }
+            if (state === 'failed') scheduleRetry('cloudflare connection failed');
+            updateViewState({
+              conn: state,
+              playing: state === 'failed' || state === 'closed' ? false : viewState.playing,
+            });
+          };
+
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            await whenIceGathered(pc);
+
+            const response = await fetch(whepUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/sdp' },
+              body: pc.localDescription.sdp,
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const answer = await response.text();
+
+            // The attempt can be torn down while that request is in flight.
+            if (!attempt || attempt.pc !== pc) return;
+
+            await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+            dbg('ok', 'Cloudflare accepted the subscription — media negotiating');
+
+            // Relative per the spec, so resolve it against the endpoint.
+            const location = response.headers.get('Location');
+            if (location && attempt && attempt.pc === pc) {
+              attempt.whepSession = new URL(location, whepUrl).toString();
+            }
+          } catch (err) {
+            // A refusal here means the court is not actually publishing to this
+            // input yet — most often the stream document is a moment ahead of
+            // the phone's own upload. Retrying is the right answer, not an error
+            // shown to the viewer.
+            dbg('err', 'Cloudflare playback request failed', { message: err.message });
+            scheduleRetry('cloudflare request failed');
+          }
+        }
+
+        async function connectViaMesh(reason) {
           teardownAttempt();
           updateViewState({ conn: 'new', playing: false, fatal: null });
 
@@ -991,7 +1303,7 @@
           video.srcObject = remote;
 
           const unsubs = [];
-          attempt = { pc, unsubs, viewerDoc, answerCandidates };
+          attempt = { pc, unsubs, viewerDoc, answerCandidates, mode: 'mesh' };
 
           dbg('info', `connection attempt (${reason})`, {
             viewerId,
@@ -1180,24 +1492,32 @@
         onSnapshot(streamDoc, (snap) => {
           const data = snap.exists() ? snap.data() : null;
           const live = !!data?.live;
+          const whepUrl = safeWhepUrl(data?.whepUrl);
+          // The court can change how it delivers between broadcasts — it uses
+          // Cloudflare when the venue's server has it configured and the peer
+          // mesh when it does not, and it clears this field when it falls back.
+          // A viewer already connected on the old path has to be moved.
+          const pathChanged = whepUrl !== viewState.whepUrl;
 
           dbg('info', 'stream document', {
             exists: snap.exists(),
             live,
             paused: !!data?.paused,
+            delivery: whepUrl ? 'cloudflare' : 'peer-to-peer',
           });
-          updateViewState({ live, paused: !!data?.paused });
+          updateViewState({ live, paused: !!data?.paused, whepUrl });
 
           // The court just started (or restarted) transmitting. Re-announce
           // rather than waiting: a viewer who was already on the page before
           // Start was pressed has, by now, either had its request expire or
           // been swept up by the broadcaster's start-up purge — which is why
           // this used to need a manual page reload.
-          if (live && !wasLive && !viewState.playing) {
+          const wentLive = live && !wasLive && !viewState.playing;
+          if (live && (wentLive || pathChanged)) {
             cancelRetry();
             retryCount = 0;
             updateViewState({ exhausted: false });
-            void connectAttempt('court went live');
+            void connectAttempt(wentLive ? 'court went live' : 'delivery path changed');
           }
           wasLive = live;
         });
