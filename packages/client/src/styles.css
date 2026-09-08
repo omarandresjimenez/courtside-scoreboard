@@ -11,6 +11,11 @@
      variables, not just var(--bg-raised) with opacity, because the light
      theme repaints body as a flat color instead of a gradient (nothing to
      show through) and wants an opaque surface instead. */
+  /* Hover fill for buttons. A variable rather than a literal because the
+     literal it replaces stayed dark navy under the light theme, turning a
+     light button almost black on hover — the same trap --card-bg was
+     introduced for. */
+  --button-hover-bg: #232d4a;
   --card-bg: rgba(18, 24, 43, 0.75);
   --fieldset-bg: rgba(10, 14, 26, 0.35);
 
@@ -143,7 +148,7 @@ button {
 }
 
 button:hover {
-  background: #232d4a;
+  background: var(--button-hover-bg);
   border-color: var(--accent);
 }
 
@@ -1363,6 +1368,7 @@ body[data-theme='light'] {
   /* Dark mode's versions of these are translucent, meant to glow softly
      over body's gradient — this theme repaints body as a flat color
      instead (nothing to show through), so these are opaque surfaces. */
+  --button-hover-bg: #e2e8f0;
   --card-bg: #ffffff;
   --fieldset-bg: #f1f5f9;
   background: var(--bg);
