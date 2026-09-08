@@ -934,7 +934,7 @@ export function AdminDashboard() {
                             </button>
                             <QRCodeSVG
                               value={streamBroadcastLinkFor(c, mdnsHostname)}
-                              size={32}
+                              size={52}
                               bgColor="#ffffff"
                               fgColor="#0a0e1a"
                               marginSize={1}
