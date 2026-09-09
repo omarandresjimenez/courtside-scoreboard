@@ -61,8 +61,19 @@ describe('useFullscreen', () => {
     setDoc({ fullscreenEnabled: false, webkitFullscreenEnabled: undefined });
     (HTMLVideoElement.prototype as unknown as Mutable).webkitEnterFullscreen = jest.fn();
 
-    const { result } = renderHook(() => useFullscreen(containerRef(null)));
+    const { result } = renderHook(() => useFullscreen(containerRef(null), videoRef(null)));
     expect(result.current.isSupported).toBe(true);
+  });
+
+  it('reports no support on iPhone for a caller with no video to fall back to', () => {
+    // A screen with no <video> at all (e.g. the umpire's court diagram) has
+    // nothing for the iPhone route to enter fullscreen with, so the button
+    // must not claim support it can't act on.
+    setDoc({ fullscreenEnabled: false, webkitFullscreenEnabled: undefined });
+    (HTMLVideoElement.prototype as unknown as Mutable).webkitEnterFullscreen = jest.fn();
+
+    const { result } = renderHook(() => useFullscreen(containerRef(null)));
+    expect(result.current.isSupported).toBe(false);
   });
 
   it('reports no support when the browser offers no route at all', () => {

@@ -242,6 +242,29 @@ describe('UmpireScreen', () => {
       expect(noopHandlers.addPoint).toHaveBeenCalledWith('B');
     });
 
+    it("requests full screen on the umpire's first tap, without swallowing that tap", async () => {
+      ready(buildState());
+      renderAt('m1', 'tok');
+      const main = document.querySelector('main.umpire-screen') as HTMLElement;
+      const requestFullscreen = jest.fn(async () => undefined);
+      main.requestFullscreen = requestFullscreen;
+      await userEvent.click(screen.getByLabelText('Point to A. Adams'));
+      expect(requestFullscreen).toHaveBeenCalledTimes(1);
+      // The same tap still reached the point button underneath.
+      expect(noopHandlers.addPoint).toHaveBeenCalledWith('A');
+    });
+
+    it('removes the tap listener once the umpire screen unmounts', () => {
+      const removeSpy = jest.spyOn(document, 'removeEventListener');
+      ready(buildState());
+      const view = renderAt('m1', 'tok');
+      view.unmount();
+      expect(removeSpy).toHaveBeenCalledWith('pointerdown', expect.any(Function), {
+        capture: true,
+      });
+      removeSpy.mockRestore();
+    });
+
     it('shows the umpire call for the current score', () => {
       ready(
         buildState({

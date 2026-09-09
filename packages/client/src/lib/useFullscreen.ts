@@ -21,15 +21,19 @@ function currentFullscreenElement(): Element | null {
 }
 
 /**
- * True if this browser can go fullscreen at all, by any route.
+ * True if this browser can go fullscreen at all, by any route available to
+ * *this* call — `hasVideoFallback` is false for a caller that passed no
+ * `videoRef`, since the iPhone route below has nothing to enter fullscreen
+ * without one.
  *
  * Probed on the prototypes rather than a live element so the answer is stable
  * from the first render, before any ref has been attached.
  */
-function detectSupport(): boolean {
+function detectSupport(hasVideoFallback: boolean): boolean {
   if (typeof document === 'undefined') return false;
   const doc = document as WebkitDocument;
   if (doc.fullscreenEnabled || doc.webkitFullscreenEnabled) return true;
+  if (!hasVideoFallback) return false;
   // iPhone Safari: no element fullscreen, but video has its own native path.
   return (
     typeof HTMLVideoElement !== 'undefined' &&
@@ -57,7 +61,7 @@ export function useFullscreen(
   videoRef?: RefObject<HTMLVideoElement | null>,
 ): FullscreenState {
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isSupported] = useState(detectSupport);
+  const [isSupported] = useState(() => detectSupport(videoRef !== undefined));
 
   useEffect(() => {
     const sync = () => setIsFullscreen(currentFullscreenElement() !== null);

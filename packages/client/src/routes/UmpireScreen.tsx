@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   umpireCall,
   type Side,
@@ -12,6 +12,8 @@ import { useMatchState } from '../lib/useMatchState.js';
 import { CourtDiagram } from './CourtDiagram.js';
 import { ConfirmDialog } from '../lib/ConfirmDialog.js';
 import { formatCountdown, useCountdown } from '../lib/useCountdown.js';
+import { useFullscreen } from '../lib/useFullscreen.js';
+import { FullscreenButton } from '../lib/FullscreenButton.js';
 
 const other = (side: Side): Side => (side === 'A' ? 'B' : 'A');
 
@@ -91,6 +93,27 @@ export function UmpireScreen() {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // Full screen by default on a phone: the Fullscreen API only ever grants a
+  // request made from a trusted user gesture, so it can't be requested on
+  // load — this piggybacks on whichever the umpire taps first (still lets
+  // that same tap reach its real target), rather than making them find a
+  // separate "go full screen" control before they can start scoring.
+  // Listens on `document`, not the screen's own container: while the match
+  // is still loading, the guards below render a plain `<p>` instead of that
+  // container, and a container-scoped listener attached now would never see
+  // the element that mounts once the match arrives a moment later.
+  const containerRef = useRef<HTMLElement>(null);
+  const fullscreen = useFullscreen(containerRef);
+  const { toggle: enterFullscreenOnFirstTap } = fullscreen;
+  useEffect(() => {
+    document.addEventListener('pointerdown', enterFullscreenOnFirstTap, {
+      once: true,
+      capture: true,
+    });
+    return () =>
+      document.removeEventListener('pointerdown', enterFullscreenOnFirstTap, { capture: true });
+  }, [enterFullscreenOnFirstTap]);
 
   const {
     state,
@@ -268,17 +291,20 @@ export function UmpireScreen() {
   );
 
   return (
-    <main className="umpire-screen umpire-court-view">
-      <p className="connection-status" data-connected={connected}>
-        {connected ? 'Live' : 'Reconnecting…'}
-      </p>
+    <main className="umpire-screen umpire-court-view" ref={containerRef}>
+      <FullscreenButton state={fullscreen} />
+      <div className="umpire-status-row">
+        <p className="connection-status" data-connected={connected}>
+          {connected ? 'Live' : 'Reconnecting…'}
+        </p>
 
-      <div className="umpire-meta">
-        <span className="summary-pill">{match.courtLabel ?? 'Court'}</span>
-        {/* Category over match type: "MS U19" already says singles. */}
-        <span className={`summary-pill${match.category ? ' category-pill' : ''}`}>
-          {match.category ?? match.matchType}
-        </span>
+        <div className="umpire-meta">
+          <span className="summary-pill">{match.courtLabel ?? 'Court'}</span>
+          {/* Category over match type: "MS U19" already says singles. */}
+          <span className={`summary-pill${match.category ? ' category-pill' : ''}`}>
+            {match.category ?? match.matchType}
+          </span>
+        </div>
       </div>
 
       <header className="umpire-teams">
