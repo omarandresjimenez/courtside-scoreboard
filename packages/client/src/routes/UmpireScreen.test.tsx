@@ -373,6 +373,44 @@ describe('UmpireScreen', () => {
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     });
 
+    const decidingGameInterval = () =>
+      buildState({
+        currentSet: {
+          setNumber: 3,
+          scoreA: 11,
+          scoreB: 4,
+          winner: null,
+          intervalTriggered: true,
+          intervalResumed: false,
+        },
+        setsWon: { A: 1, B: 1 },
+        onInterval: true,
+        interval: { kind: 'MID_GAME', seconds: 60 },
+      });
+
+    it('flags the mandatory end change in the deciding game, and swaps ends on resume', async () => {
+      ready(decidingGameInterval());
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: /Change ends — Interval 1:00/ }));
+      expect(
+        screen.getByRole('alertdialog', { name: 'Change ends before resuming' }),
+      ).toBeInTheDocument();
+      expect(screen.getByText(/Deciding game: players must change ends now\./)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Ends changed — Resume' }));
+      expect(noopHandlers.resumeFromInterval).toHaveBeenCalled();
+      // The end change is real, not just worded — the same mechanism the
+      // manual "Swap ends" control uses (see the ends-change tests below).
+      expect(localStorage.getItem('courtside:ends:m1')).toBe('B');
+    });
+
+    it('does not flag an end change for the first or second game interval', async () => {
+      ready(midGameInterval());
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: /Interval/ }));
+      await userEvent.click(screen.getByRole('button', { name: 'Resume' }));
+      expect(localStorage.getItem('courtside:ends:m1')).toBeNull();
+    });
+
     it('locks scoring for the longer break between games', () => {
       ready(
         buildState({

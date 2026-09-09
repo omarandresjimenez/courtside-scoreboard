@@ -1221,7 +1221,7 @@ button.banner:active {
 }
 
 .tv-player-row .set-score-winner {
-  color: var(--warning);
+  color: var(--danger);
 }
 
 .tv-player-row.match-winner .tv-player-name::after {

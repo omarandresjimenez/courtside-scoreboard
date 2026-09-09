@@ -139,6 +139,13 @@ export function UmpireScreen() {
   // cutting a break short in every case, but calling the warm-up "resume play"
   // would describe play that has not started yet.
   const breakWording = BREAK_WORDING[breakNow?.kind ?? 'MID_GAME'];
+  // BWF rule: in the deciding game only, players change ends again at the
+  // same interval score that triggers the mid-game break — on top of the
+  // once-per-game alternation `leftSide` already handles above. This can't
+  // be automatic like that alternation: the umpire has to tell it the swap
+  // actually happened on court, at the moment they dismiss the break.
+  const isDecidingGameInterval =
+    breakNow?.kind === 'MID_GAME' && derived.currentSet.setNumber === 3;
   // Points are locked during either kind of break; the umpire ends it.
   const scoringLocked = !isReadyToScore || breakNow !== null || derived.matchWinner !== null;
   const secondsLeft = remaining ?? 0;
@@ -389,6 +396,7 @@ export function UmpireScreen() {
           )}
           {breakNow && (
             <button type="button" className="banner" onClick={() => setPendingAction('resume')}>
+              {isDecidingGameInterval && 'Change ends — '}
               {INTERVAL_LABELS[breakNow.kind]}
               {` ${formatCountdown(secondsLeft)}`} — tap to {breakWording.verb}
             </button>
@@ -412,16 +420,18 @@ export function UmpireScreen() {
 
       {pendingAction === 'resume' && breakNow && (
         <ConfirmDialog
-          title={breakWording.title}
+          title={isDecidingGameInterval ? 'Change ends before resuming' : breakWording.title}
           message={
-            secondsLeft > 0
+            (isDecidingGameInterval ? 'Deciding game: players must change ends now. ' : '') +
+            (secondsLeft > 0
               ? `${formatCountdown(secondsLeft)} of the ${breakWording.noun} still to run.`
-              : `The ${breakWording.noun} is over.`
+              : `The ${breakWording.noun} is over.`)
           }
           choices={[
             {
-              label: breakWording.action,
+              label: isDecidingGameInterval ? 'Ends changed — Resume' : breakWording.action,
               onSelect: () => {
+                if (isDecidingGameInterval) swapEnds();
                 resumeFromInterval();
                 setPendingAction(null);
               },

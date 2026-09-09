@@ -243,6 +243,13 @@
         background: #d81f36;
         color: #fff;
       }
+      /* A finished set: the side that won it gets a red number, same red as
+         the winner's name once the match itself is decided. Never overlaps
+         with .current — the set in play has no winner yet. */
+      .bug-scores b.set-winner {
+        color: #b8102e;
+        font-weight: 800;
+      }
 
       /* Video stage. The score rides on top of it as a bug rather than sitting
          underneath, so the picture can claim nearly the whole viewport. */
@@ -1391,7 +1398,9 @@
               // The game in play is the last one shown, and only while the
               // match is still running — a finished match has no red cell.
               const current = !d.matchWinner && index === shown.length - 1;
-              return `<b class="${current ? 'current' : ''}">${v ?? 0}</b>`;
+              const setWon = s.winner === side;
+              const cls = [current && 'current', setWon && 'set-winner'].filter(Boolean).join(' ');
+              return `<b class="${cls}">${v ?? 0}</b>`;
             })
             .join('');
 
