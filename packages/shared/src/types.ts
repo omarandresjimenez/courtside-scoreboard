@@ -135,6 +135,13 @@ export interface Match {
 export type ScoreEventType =
   'START_SET' | 'POINT' | 'UNDO_LAST_POINT' | 'RETIRE' | 'RESUME_INTERVAL';
 
+/**
+ * How a match ended early via a RETIRE event — a player/pair retiring mid-match,
+ * or the opponent never showing up at all. Meaningless (absent) for a RETIRE
+ * event that merely finalises an already-decided match, since nobody retired.
+ */
+export type RetireReason = 'RETIREMENT' | 'WALKOVER';
+
 /** Doubles-only: which partner currently occupies which service court, per side. */
 export type CourtPositions = Partial<Record<Side, { right: string; left: string }>>;
 
@@ -176,6 +183,8 @@ export interface DerivedMatchSummary {
   matchWinner: Side | null;
   /** Set when the match ended early; see DerivedMatchState.retiredSide. */
   retiredSide?: Side | null;
+  /** Set alongside retiredSide; see DerivedMatchState.retireReason. */
+  retireReason?: RetireReason | null;
 }
 
 export interface ScoreEvent {
@@ -184,6 +193,8 @@ export interface ScoreEvent {
   type: ScoreEventType;
   /** POINT: who scored. RETIRE: the declared winner. */
   side?: Side;
+  /** RETIRE only: retirement vs walkover (opponent no-show); see RetireReason. */
+  retireReason?: RetireReason;
   /** START_SET only. */
   firstServerPlayerId?: string;
   /** START_SET only; needed for singles, where no doubles court layout exists. */

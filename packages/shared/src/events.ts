@@ -4,7 +4,7 @@
  * server and client) keeps both sides of the wire in sync at compile time.
  */
 
-import type { CourtPositions, Match, Side } from './types.js';
+import type { CourtPositions, Match, RetireReason, Side } from './types.js';
 import type { DerivedMatchState } from './scoring.js';
 
 export const UMPIRE_EVENTS = {
@@ -61,6 +61,8 @@ export interface RetireMatchPayload {
   matchId: string;
   eventId: string;
   winnerSide: Side;
+  /** Omitted when finalising an already-decided match — nobody retired. */
+  reason?: RetireReason;
 }
 
 export interface AssignMatchToCourtPayload {

@@ -69,6 +69,7 @@ function buildState(overrides: Partial<MatchStatePayload['derived']> = {}): Matc
       serviceOver: false,
       finalised: false,
       retiredSide: null,
+      retireReason: null,
       ...overrides,
     },
   };
@@ -476,23 +477,50 @@ describe('UmpireScreen', () => {
       expect(noopHandlers.resumeFromInterval).toHaveBeenCalled();
     });
 
-    it('ends the match early, awarding it to the chosen side', async () => {
+    it('asks retirement or walkover, then ends the match early awarding it to the chosen side', async () => {
       ready(buildState());
       renderAt('m1', 'tok');
       await userEvent.click(screen.getByRole('button', { name: 'End match' }));
       expect(
+        screen.getByRole('alertdialog', { name: 'Why is the match ending early?' }),
+      ).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Retirement' }));
+      expect(
         screen.getByRole('alertdialog', { name: 'End this match early?' }),
       ).toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: 'B. Bruno wins' }));
-      expect(noopHandlers.retireMatch).toHaveBeenCalledWith('B');
+      expect(noopHandlers.retireMatch).toHaveBeenCalledWith('B', 'RETIREMENT');
     });
 
-    it('does not end the match when the retire dialog is dismissed', async () => {
+    it('ends the match as a walkover when the opponent never showed up', async () => {
+      ready(buildState());
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: 'End match' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Walkover (opponent no-show)' }));
+      await userEvent.click(screen.getByRole('button', { name: 'A. Adams wins' }));
+      expect(noopHandlers.retireMatch).toHaveBeenCalledWith('A', 'WALKOVER');
+    });
+
+    it('does not end the match when the retire-reason dialog is dismissed', async () => {
       ready(buildState());
       renderAt('m1', 'tok');
       await userEvent.click(screen.getByRole('button', { name: 'End match' }));
       await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
       expect(noopHandlers.retireMatch).not.toHaveBeenCalled();
+    });
+
+    it('does not end the match when the retire side-choice dialog is dismissed', async () => {
+      ready(buildState());
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: 'End match' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Retirement' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(noopHandlers.retireMatch).not.toHaveBeenCalled();
+      // Cancelling clears the chosen reason too — reopening "End match" starts over.
+      await userEvent.click(screen.getByRole('button', { name: 'End match' }));
+      expect(
+        screen.getByRole('alertdialog', { name: 'Why is the match ending early?' }),
+      ).toBeInTheDocument();
     });
 
     it('advances the elapsed clock as the match runs', () => {
@@ -602,6 +630,14 @@ describe('UmpireScreen', () => {
       expect(noopHandlers.retireMatch).toHaveBeenCalledWith('A');
     });
 
+    it('does not finalise when the finalise dialog is dismissed', async () => {
+      ready(buildState({ matchWinner: 'A', setsWon: { A: 2, B: 0 } }));
+      renderAt('m1', 'tok');
+      await userEvent.click(screen.getByRole('button', { name: 'Finalise match' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(noopHandlers.retireMatch).not.toHaveBeenCalled();
+    });
+
     it('stops offering to finalise a match the umpire already signed off', () => {
       const s = buildState({ matchWinner: 'A', setsWon: { A: 2, B: 0 }, finalised: true });
       ready(s);
@@ -627,6 +663,23 @@ describe('UmpireScreen', () => {
       ready(buildState({ matchWinner: 'B', finalised: true }));
       renderAt('m1', 'tok');
       expect(document.querySelector('.retired-tag')).toBeNull();
+    });
+
+    it('marks a walkover distinctly from a retirement', () => {
+      ready(
+        buildState({
+          matchWinner: 'B',
+          retiredSide: 'A',
+          retireReason: 'WALKOVER',
+          finalised: true,
+        }),
+      );
+      renderAt('m1', 'tok');
+      const summary = screen.getByLabelText('Match summary');
+      expect(summary.querySelector('.retired-tag')).toHaveTextContent('W.O.');
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+        'A. Adams did not show up (W.O.)',
+      );
     });
 
     it('shows each side team and country in the header when present', () => {

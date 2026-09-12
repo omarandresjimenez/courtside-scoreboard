@@ -95,6 +95,11 @@ export function registerSocketHandlers(io: Server): void {
           eventId: payload.eventId,
           type: 'RETIRE',
           side: payload.winnerSide,
+          // Reuses the same free-form payload column START_SET stores its
+          // extra fields in, rather than a dedicated column, since RETIRE
+          // already has `side` for its one required field and this one is
+          // optional.
+          ...(payload.reason ? { payload: JSON.stringify({ reason: payload.reason }) } : {}),
           timestamp: BigInt(Date.now()),
         }),
       );
@@ -206,12 +211,17 @@ async function handleUmpireConnection(
 }
 
 async function joinCourt(socket: Socket, courtId: string): Promise<void> {
+  // Joined unconditionally, even with no match assigned yet: this is the
+  // room every subsequent match-state broadcast for this court goes out
+  // to (see withAuthorizedMatch and POST /matches), so a TV sitting on
+  // "waiting for a match" is still reachable the instant the umpire
+  // starts one, instead of being stuck until the page is reloaded.
+  await socket.join(roomForCourt(courtId));
   const court = await prisma.court.findUnique({ where: { id: courtId } });
   if (!court?.currentMatchId) {
     socket.emit(SERVER_EVENTS.MATCH_NOT_FOUND, { courtId });
     return;
   }
-  await socket.join(roomForCourt(courtId));
   await socket.join(roomForMatch(court.currentMatchId));
   await sendCurrentState(socket, court.currentMatchId);
 }
@@ -263,7 +273,20 @@ async function withAuthorizedMatch(
 
   const refreshedState = await loadMatchState(matchId);
   if (refreshedState) {
-    io.to(roomForMatch(matchId)).emit(SERVER_EVENTS.MATCH_STATE, refreshedState);
+    // Also targets the court room, chained rather than a second .emit():
+    // Socket.io de-duplicates a chained .to().to() by socket id, so a TV
+    // that's a member of both rooms (the ordinary case) still gets exactly
+    // one copy. The court room matters because a TV that was already open
+    // when this match started only ever joined the *court's* room (see
+    // joinCourt above, and POST /matches's own broadcast when a match is
+    // first created) — it never separately joins this specific match's
+    // room, so without this a TV outliving the match it first connected
+    // for would go silent on every point, and specifically on however the
+    // match ends, until manually reloaded.
+    const rooms = refreshedState.match.assignedCourtId
+      ? io.to(roomForMatch(matchId)).to(roomForCourt(refreshedState.match.assignedCourtId))
+      : io.to(roomForMatch(matchId));
+    rooms.emit(SERVER_EVENTS.MATCH_STATE, refreshedState);
     publishScoreToCloud(refreshedState);
   }
 }

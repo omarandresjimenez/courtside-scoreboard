@@ -208,6 +208,23 @@
       .bug-name.is-winner {
         color: #b8102e;
       }
+      /* Same small red pill as the app's own .retired-tag (styles.css) —
+         flags the side that retired or didn't show up, right in the score
+         table, not only in the status line below it. */
+      .bug-retired-tag {
+        display: inline-flex;
+        align-items: center;
+        flex-shrink: 0;
+        padding: 0.1em 0.4em;
+        border-radius: 999px;
+        background: rgba(216, 31, 54, 0.12);
+        border: 1px solid rgba(216, 31, 54, 0.4);
+        color: #b8102e;
+        font-size: 0.6em;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
 
       /* Serve marker: the shuttle sits on the serving player's row, pointing
          into the name, the way the television graphic places it. Drawn rather
@@ -1392,6 +1409,10 @@
         for (const side of ['A', 'B']) {
           const serving = d.serve?.servingSide === side && !d.matchWinner;
           const won = d.matchWinner === side;
+          const retired = d.retiredSide === side;
+          const retiredTag = retired
+            ? `<span class="bug-retired-tag">${RETIRE_REASON_TAGS[d.retireReason || 'RETIREMENT']}</span>`
+            : '';
           const scores = shown
             .map((s, index) => {
               const v = side === 'A' ? s.scoreA : s.scoreB;
@@ -1409,13 +1430,17 @@
             `<span class="bug-country">${escapeHtml(countryLabel(countryOf(data, side)))}</span>` +
             `<span class="bug-name${won ? ' is-winner' : ''}">` +
             `<span>${escapeHtml(sideName(data, side))}</span>` +
+            retiredTag +
             (serving ? SHUTTLE : '') +
             '</span>' +
             `<span class="bug-scores">${scores}</span>`;
         }
 
         if (d.matchWinner) {
-          setStatus(`${sideName(data, d.matchWinner)} wins the match`);
+          const suffix = d.retiredSide
+            ? ` — ${sideName(data, d.retiredSide)} ${RETIRE_REASON_HEADLINES[d.retireReason || 'RETIREMENT']}`
+            : '';
+          setStatus(`${sideName(data, d.matchWinner)} wins the match${suffix}`);
         } else if (d.interval) {
           setStatus(INTERVAL_LABELS[d.interval.kind] ?? 'Interval');
         } else {
@@ -1433,6 +1458,20 @@
         WARM_UP: 'Warm-up',
         MID_GAME: 'Interval',
         BETWEEN_GAMES: 'Game interval',
+      };
+
+      /**
+       * Mirror of RETIRE_REASON_TAGS / RETIRE_REASON_HEADLINES in
+       * packages/shared/src/scoring.ts — same no-build-step reasoning as
+       * INTERVAL_LABELS above.
+       */
+      const RETIRE_REASON_TAGS = {
+        RETIREMENT: 'Retired',
+        WALKOVER: 'W.O.',
+      };
+      const RETIRE_REASON_HEADLINES = {
+        RETIREMENT: 'retired',
+        WALKOVER: 'did not show up (W.O.)',
       };
 
       function escapeHtml(s) {

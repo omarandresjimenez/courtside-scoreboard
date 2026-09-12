@@ -4,6 +4,7 @@ import {
   UMPIRE_EVENTS,
   type CourtPositions,
   type MatchStatePayload,
+  type RetireReason,
   type Side,
 } from '@courtside/shared';
 import { connectSocket, type SocketConnectionOptions } from './socket.js';
@@ -25,10 +26,11 @@ interface UseMatchStateResult {
   ) => void;
   resumeFromInterval: () => void;
   /**
-   * Ends the match immediately, awarding it to `winnerSide` — a retirement,
-   * or the umpire finalising a match the scoring engine has already decided.
+   * Ends the match immediately, awarding it to `winnerSide` — a retirement or
+   * walkover (`reason`), or the umpire finalising a match the scoring engine
+   * has already decided (no `reason`, since nobody retired).
    */
-  retireMatch: (winnerSide: Side) => void;
+  retireMatch: (winnerSide: Side, reason?: RetireReason) => void;
 }
 
 /**
@@ -118,12 +120,13 @@ export function useMatchState(
         ...(courtPositions ? { courtPositions } : {}),
       });
     },
-    retireMatch: (winnerSide) => {
+    retireMatch: (winnerSide, reason) => {
       if (!('matchId' in options)) return;
       socketRef.current?.emit(UMPIRE_EVENTS.RETIRE_MATCH, {
         matchId: options.matchId,
         eventId: generateEventId(),
         winnerSide,
+        ...(reason ? { reason } : {}),
       });
     },
     resumeFromInterval: () => {

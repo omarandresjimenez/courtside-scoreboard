@@ -67,6 +67,7 @@ function buildState(overrides: Partial<MatchStatePayload['derived']> = {}): Matc
       serviceOver: false,
       finalised: false,
       retiredSide: null,
+      retireReason: null,
       ...overrides,
     },
   };
@@ -334,6 +335,19 @@ describe('TvScreen — teams, retirement and the wall clock', () => {
     renderAt('c1');
     expect(screen.getByText('Retired')).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/retired/i);
+  });
+
+  it('marks a walkover distinctly from a retirement', () => {
+    const state = buildState({
+      matchWinner: 'B',
+      retiredSide: 'A',
+      retireReason: 'WALKOVER',
+      finalised: true,
+    });
+    mockUseMatchState.mockReturnValue({ state, isFromCache: false, error: null });
+    renderAt('c1');
+    expect(screen.getByText('W.O.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/did not show up/i);
   });
 
   it('leaves the retirement marker off a match played to its end', () => {

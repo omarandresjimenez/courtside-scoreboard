@@ -370,6 +370,7 @@ matchesRouter.get(
               setsWon: state.derived.setsWon,
               matchWinner: state.derived.matchWinner,
               retiredSide: state.derived.retiredSide,
+              retireReason: state.derived.retireReason,
             },
           },
         ];

@@ -3,7 +3,10 @@ import {
   umpireCall,
   type Side,
   type IntervalKind,
+  type RetireReason,
   INTERVAL_LABELS,
+  RETIRE_REASON_TAGS,
+  RETIRE_REASON_HEADLINES,
   formatSideNames,
   formatPlayerName,
 } from '@courtside/shared';
@@ -87,6 +90,9 @@ export function UmpireScreen() {
   const [openingSide, setOpeningSide] = useState<Side>('A');
   const [rightCourtPlayer, setRightCourtPlayer] = useState<Record<Side, string>>({ A: '', B: '' });
   const [pendingAction, setPendingAction] = useState<'resume' | 'finish' | null>(null);
+  // Only relevant mid-'finish': which of the two ways a match can end early
+  // the umpire picked, before they're asked which side it's awarded to.
+  const [pendingRetireReason, setPendingRetireReason] = useState<RetireReason | null>(null);
   // Re-renders once a second purely so the elapsed clock advances.
   const [, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -318,7 +324,8 @@ export function UmpireScreen() {
         <section className="match-complete">
           <h1>
             {teamName(derived.matchWinner)} wins the match
-            {derived.retiredSide && ` — ${teamName(derived.retiredSide)} retired`}
+            {derived.retiredSide &&
+              ` — ${teamName(derived.retiredSide)} ${RETIRE_REASON_HEADLINES[derived.retireReason ?? 'RETIREMENT']}`}
           </h1>
           <div
             className="tv-scoreboard umpire-scoreboard"
@@ -340,7 +347,11 @@ export function UmpireScreen() {
               >
                 <strong className="tv-player-name">
                   {teamName(side)}
-                  {derived.retiredSide === side && <span className="retired-tag">Retired</span>}
+                  {derived.retiredSide === side && (
+                    <span className="retired-tag">
+                      {RETIRE_REASON_TAGS[derived.retireReason ?? 'RETIREMENT']}
+                    </span>
+                  )}
                 </strong>
                 {summarySets.map((set) => (
                   <strong
@@ -467,37 +478,61 @@ export function UmpireScreen() {
         />
       )}
 
-      {pendingAction === 'finish' && (
+      {pendingAction === 'finish' && derived.matchWinner && (
         <ConfirmDialog
-          title={derived.matchWinner ? 'Finalise this match?' : 'End this match early?'}
+          title="Finalise this match?"
+          message={`${teamName(derived.matchWinner)} wins. This closes the match for good.`}
+          choices={[
+            {
+              label: 'Finalise',
+              onSelect: () => {
+                retireMatch(derived.matchWinner!);
+                setPendingAction(null);
+              },
+            },
+          ]}
+          onCancel={() => setPendingAction(null)}
+        />
+      )}
+
+      {pendingAction === 'finish' && !derived.matchWinner && !pendingRetireReason && (
+        <ConfirmDialog
+          title="Why is the match ending early?"
+          message="Choose retirement or walkover before picking who the match is awarded to."
+          choices={[
+            { label: 'Retirement', onSelect: () => setPendingRetireReason('RETIREMENT') },
+            {
+              label: 'Walkover (opponent no-show)',
+              onSelect: () => setPendingRetireReason('WALKOVER'),
+            },
+          ]}
+          onCancel={() => setPendingAction(null)}
+        />
+      )}
+
+      {pendingAction === 'finish' && !derived.matchWinner && pendingRetireReason && (
+        <ConfirmDialog
+          title="End this match early?"
           message={
-            derived.matchWinner
-              ? `${teamName(derived.matchWinner)} wins. This closes the match for good.`
-              : 'Pick the side the match is awarded to — use this when a player retires.'
+            pendingRetireReason === 'RETIREMENT'
+              ? 'Pick the side the match is awarded to — the other side retired.'
+              : 'Pick the side the match is awarded to — the other side did not show up.'
           }
           // Cancel always means "do nothing", so the winning side is chosen
           // from explicit buttons rather than from confirm-vs-cancel.
-          choices={
-            derived.matchWinner
-              ? [
-                  {
-                    label: 'Finalise',
-                    onSelect: () => {
-                      retireMatch(derived.matchWinner!);
-                      setPendingAction(null);
-                    },
-                  },
-                ]
-              : ([leftSide, rightSide] as const).map((side) => ({
-                  label: `${teamName(side)} wins`,
-                  danger: true,
-                  onSelect: () => {
-                    retireMatch(side);
-                    setPendingAction(null);
-                  },
-                }))
-          }
-          onCancel={() => setPendingAction(null)}
+          choices={([leftSide, rightSide] as const).map((side) => ({
+            label: `${teamName(side)} wins`,
+            danger: true,
+            onSelect: () => {
+              retireMatch(side, pendingRetireReason);
+              setPendingAction(null);
+              setPendingRetireReason(null);
+            },
+          }))}
+          onCancel={() => {
+            setPendingAction(null);
+            setPendingRetireReason(null);
+          }}
         />
       )}
     </main>

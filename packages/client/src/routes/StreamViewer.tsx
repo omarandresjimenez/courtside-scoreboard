@@ -1,4 +1,4 @@
-import { formatSideNames } from '@courtside/shared';
+import { formatSideNames, RETIRE_REASON_HEADLINES } from '@courtside/shared';
 import { useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMatchState } from '../lib/useMatchState.js';
@@ -123,6 +123,8 @@ export function StreamViewer() {
           {derived?.matchWinner && (
             <p className="stream-winner">
               <strong>{playerName(derived.matchWinner)} wins</strong>
+              {derived.retiredSide &&
+                ` — ${playerName(derived.retiredSide)} ${RETIRE_REASON_HEADLINES[derived.retireReason ?? 'RETIREMENT']}`}
             </p>
           )}
         </div>

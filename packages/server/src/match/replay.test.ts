@@ -101,4 +101,19 @@ describe('loadMatchState', () => {
     expect(state?.derived.matchWinner).toBe('A');
     expect(state?.match.completedAt).toBe('2026-08-29T10:05:00.000Z');
   });
+
+  it('decodes a walkover reason from a RETIRE event payload', async () => {
+    const match = mockPrisma.seedMatch();
+    mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(1) });
+    mockPrisma.seedEvent(match.id, {
+      type: 'RETIRE',
+      side: 'A',
+      timestamp: BigInt(2),
+      payload: JSON.stringify({ reason: 'WALKOVER' }),
+    });
+
+    const state = await loadMatchState(match.id);
+
+    expect(state?.derived.retireReason).toBe('WALKOVER');
+  });
 });

@@ -1,4 +1,10 @@
-import { formatSideNames, formatPlayerName, INTERVAL_LABELS } from '@courtside/shared';
+import {
+  formatSideNames,
+  formatPlayerName,
+  INTERVAL_LABELS,
+  RETIRE_REASON_TAGS,
+  RETIRE_REASON_HEADLINES,
+} from '@courtside/shared';
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useMatchState } from '../lib/useMatchState.js';
@@ -94,7 +100,11 @@ export function TvScreen() {
               {!derived.matchWinner && servingPlayerName(side) && (
                 <strong className="serve-marker">Serving</strong>
               )}
-              {derived.retiredSide === side && <span className="retired-tag">Retired</span>}
+              {derived.retiredSide === side && (
+                <span className="retired-tag">
+                  {RETIRE_REASON_TAGS[derived.retireReason ?? 'RETIREMENT']}
+                </span>
+              )}
             </span>
             {scoreSets.map((set) => (
               <strong
@@ -118,7 +128,8 @@ export function TvScreen() {
         <section className="match-complete" aria-live="polite">
           <h1>
             {playerName(derived.matchWinner)} wins the match
-            {derived.retiredSide && ` — ${playerName(derived.retiredSide)} retired`}
+            {derived.retiredSide &&
+              ` — ${playerName(derived.retiredSide)} ${RETIRE_REASON_HEADLINES[derived.retireReason ?? 'RETIREMENT']}`}
           </h1>
           {elapsed && <p>Match time {elapsed}</p>}
           <button type="button" onClick={() => window.location.reload()}>

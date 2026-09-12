@@ -97,6 +97,8 @@ function summaryFromMatchState(state: MatchStatePayload): MatchSummary {
       })),
       setsWon: state.derived.setsWon,
       matchWinner: state.derived.matchWinner,
+      retiredSide: state.derived.retiredSide,
+      retireReason: state.derived.retireReason,
     },
   };
 }
@@ -106,7 +108,11 @@ function needsMatchDetail(match: MatchSummaryResponse): boolean {
 }
 
 function displayStatus(match: MatchSummary, t: Translation['t']): string {
-  if (match.derived.retiredSide) return t('status.finalizedRetired');
+  if (match.derived.retiredSide) {
+    return (match.derived.retireReason ?? 'RETIREMENT') === 'WALKOVER'
+      ? t('status.finalizedWalkover')
+      : t('status.finalizedRetired');
+  }
   if (match.derived.matchWinner || match.status === 'COMPLETED') return t('status.finalized');
   if (
     match.status === 'IN_PROGRESS' ||
@@ -1472,7 +1478,11 @@ export function AdminDashboard() {
                               <strong className="tv-player-name">
                                 {names}
                                 {m.derived.retiredSide === side && (
-                                  <span className="retired-tag">{t('matchHistory.retired')}</span>
+                                  <span className="retired-tag">
+                                    {(m.derived.retireReason ?? 'RETIREMENT') === 'WALKOVER'
+                                      ? t('matchHistory.walkover')
+                                      : t('matchHistory.retired')}
+                                  </span>
                                 )}
                               </strong>
                               {m.derived.sets.map((set) => (

@@ -162,6 +162,7 @@ const en = {
     umpirePrefix: 'Umpire:',
     setLabel: 'Set {{number}}',
     retired: 'Retired',
+    walkover: 'W.O.',
     sideFallback: 'Side {{side}}',
     previous: '← Previous',
     next: 'Next →',
@@ -170,6 +171,7 @@ const en = {
   },
   status: {
     finalizedRetired: 'Finalized — retired',
+    finalizedWalkover: 'Finalized — walkover',
     finalized: 'Finalized',
     inProgress: 'Match in progress',
     ready: 'Match ready',

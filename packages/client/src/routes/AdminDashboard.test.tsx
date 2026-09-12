@@ -1357,6 +1357,21 @@ describe('AdminDashboard', () => {
       expect(rows[1]!.querySelector('.retired-tag')).toBeNull();
     });
 
+    it('flags a walkover distinctly from a retirement in the history', async () => {
+      const walkover = JSON.parse(JSON.stringify(sampleMatches)) as typeof sampleMatches;
+      walkover[0]!.status = 'COMPLETED';
+      walkover[0]!.derived.matchWinner = 'B';
+      walkover[0]!.derived.retiredSide = 'A';
+      walkover[0]!.derived.retireReason = 'WALKOVER';
+      mockFetchRoutes({ getMatches: jsonResponse(walkover) });
+      render(<AdminDashboard />);
+      await waitFor(() =>
+        expect(document.querySelector('.history-list')).toHaveTextContent('Finalized — walkover'),
+      );
+      const rows = document.querySelectorAll('.history-list .tv-player-row');
+      expect(rows[0]!.querySelector('.retired-tag')).toHaveTextContent('W.O.');
+    });
+
     it('sends the team names and countries the admin typed', async () => {
       render(<AdminDashboard />);
       await selectCourt();

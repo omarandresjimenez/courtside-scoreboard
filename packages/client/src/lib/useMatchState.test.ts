@@ -162,6 +162,12 @@ describe('useMatchState', () => {
         UMPIRE_EVENTS.RETIRE_MATCH,
         expect.objectContaining({ matchId: 'm1', winnerSide: 'B' }),
       );
+
+      act(() => result.current.retireMatch('A', 'WALKOVER'));
+      expect(fakeSocket.emit).toHaveBeenCalledWith(
+        UMPIRE_EVENTS.RETIRE_MATCH,
+        expect.objectContaining({ matchId: 'm1', winnerSide: 'A', reason: 'WALKOVER' }),
+      );
     });
 
     it('includes courtPositions in START_SET for a doubles match', () => {

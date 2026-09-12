@@ -507,6 +507,36 @@ describe('scoring over the socket', () => {
     );
   });
 
+  it('records a walkover reason on the RETIRE event when the umpire picks one', async () => {
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-wo' });
+    mockPrisma.seedEvent(match.id, { type: 'POINT', side: 'A', timestamp: BigInt(1) });
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-wo' });
+    await waitFor(umpire, SERVER_EVENTS.MATCH_STATE);
+
+    const updatePromise = waitFor<{ derived: { retireReason: string | null } }>(
+      umpire,
+      SERVER_EVENTS.MATCH_STATE,
+    );
+    umpire.emit(UMPIRE_EVENTS.RETIRE_MATCH, {
+      matchId: match.id,
+      eventId: 'ev-wo',
+      winnerSide: 'B',
+      reason: 'WALKOVER',
+    });
+    const updated = await updatePromise;
+
+    expect(updated.derived.retireReason).toBe('WALKOVER');
+    expect(mockPrisma.prisma.scoreEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: 'RETIRE',
+          side: 'B',
+          payload: JSON.stringify({ reason: 'WALKOVER' }),
+        }),
+      }),
+    );
+  });
+
   it('refuses to retire a match for a socket that never authorized', async () => {
     const match = mockPrisma.seedMatch({ umpireToken: 'tok-retire2' });
     const impostor = connect({});
@@ -578,5 +608,62 @@ describe('TV / court subscriptions', () => {
     const socket = connect({ role: 'tv', courtId: court.id });
     const notFound = await waitFor<{ matchId: string }>(socket, SERVER_EVENTS.MATCH_NOT_FOUND);
     expect(notFound.matchId).toBe('match-does-not-exist');
+  });
+
+  it('keeps live-updating a TV that connected before any match existed for its court', async () => {
+    // Regression: a TV opened while a court had nothing assigned used to
+    // join no room at all (see joinCourt), so it never heard about a match
+    // created and played afterwards — not the start, not a single point,
+    // not how it ended — until the page was manually reloaded.
+    const court = mockPrisma.seedCourt({ currentMatchId: null });
+    const tv = connect({ role: 'tv', courtId: court.id });
+    await waitFor(tv, SERVER_EVENTS.MATCH_NOT_FOUND);
+
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-late', assignedCourtId: court.id });
+    mockPrisma.seedPlayers(match.id, [
+      { side: 'A', name: 'Alice', lastName: 'Adams', shortName: 'ALI' },
+      { side: 'B', name: 'Bilal', lastName: 'Bruno', shortName: 'BIL' },
+    ]);
+    // Simulates POST /matches assigning the new match to the court.
+    mockPrisma.seedCourt({ id: court.id, currentMatchId: match.id });
+
+    const nextState = waitFor<{
+      match: { matchId: string };
+      derived: { matchWinner: string | null; retireReason: string | null };
+    }>(tv, SERVER_EVENTS.MATCH_STATE);
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-late' });
+    await waitFor(umpire, SERVER_EVENTS.MATCH_STATE); // umpire's own initial state
+    umpire.emit(UMPIRE_EVENTS.RETIRE_MATCH, {
+      matchId: match.id,
+      eventId: 'ev-late',
+      winnerSide: 'B',
+      reason: 'WALKOVER',
+    });
+
+    const state = await nextState;
+    expect(state.match.matchId).toBe(match.id);
+    expect(state.derived.matchWinner).toBe('B');
+    expect(state.derived.retireReason).toBe('WALKOVER');
+  });
+
+  it('delivers exactly one MATCH_STATE per update to a TV joined to both the match and court rooms', async () => {
+    // Regression: broadcasting to the match room and the court room as two
+    // separate .emit() calls would double-deliver to any TV in both — the
+    // ordinary case once a court's match has actually started.
+    const match = mockPrisma.seedMatch({ umpireToken: 'tok-once', assignedCourtId: 'court-once' });
+    mockPrisma.seedCourt({ id: 'court-once', currentMatchId: match.id });
+    const tv = connect({ role: 'tv', courtId: 'court-once' });
+    await waitFor(tv, SERVER_EVENTS.MATCH_STATE); // initial state on connect
+
+    const received: unknown[] = [];
+    tv.on(SERVER_EVENTS.MATCH_STATE, (payload) => received.push(payload));
+
+    const umpire = connect({ role: 'umpire', matchId: match.id, token: 'tok-once' });
+    await waitFor(umpire, SERVER_EVENTS.MATCH_STATE);
+    const tvUpdate = waitFor(tv, SERVER_EVENTS.MATCH_STATE);
+    umpire.emit(UMPIRE_EVENTS.ADD_POINT, { matchId: match.id, eventId: 'ev-once', side: 'A' });
+    await tvUpdate;
+
+    expect(received).toHaveLength(1);
   });
 });

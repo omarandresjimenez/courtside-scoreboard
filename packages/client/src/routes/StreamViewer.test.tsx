@@ -70,6 +70,7 @@ function buildState(overrides: Record<string, unknown> = {}): MatchStatePayload 
       serviceOver: false,
       finalised: false,
       retiredSide: null,
+      retireReason: null,
       ...overrides,
     },
   } as unknown as MatchStatePayload;
@@ -170,6 +171,26 @@ describe('StreamViewer', () => {
     });
     renderAt();
     expect(screen.getByText('A. Adams wins')).toBeInTheDocument();
+  });
+
+  it('says how the match ended early, alongside the winner', () => {
+    mockUseMatchState.mockReturnValue({
+      state: buildState({ matchWinner: 'A', retiredSide: 'B', retireReason: 'WALKOVER' }),
+      isFromCache: false,
+      error: null,
+    });
+    renderAt();
+    expect(screen.getByText(/B\. Bruno did not show up \(W\.O\.\)/)).toBeInTheDocument();
+  });
+
+  it('defaults to a retirement label when no reason is recorded', () => {
+    mockUseMatchState.mockReturnValue({
+      state: buildState({ matchWinner: 'A', retiredSide: 'B' }),
+      isFromCache: false,
+      error: null,
+    });
+    renderAt();
+    expect(screen.getByText(/B\. Bruno retired/)).toBeInTheDocument();
   });
 
   it('tells the viewer no match is on this court yet when state errored', () => {

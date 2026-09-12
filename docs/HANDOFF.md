@@ -789,6 +789,62 @@ off in practice. The QR code's own white plate/dark-module background
 to this — see the earlier note in this file about scanner contrast
 requirements.
 
+## Later session — retirement vs walkover
+
+Item 5 of the earlier session above added a `retiredSide` label everywhere a
+match summary appears, but only ever meant one thing: a player retired
+mid-match. There was no way to record the other real early-ending case — the
+opponent never showing up at all — so this session added a second reason
+alongside it rather than a new mechanism.
+
+`RetireReason = 'RETIREMENT' | 'WALKOVER'` (`packages/shared/src/types.ts`)
+travels the same path `retiredSide` already did: an optional `reason` on
+`RetireMatchPayload` (the socket payload), an optional `retireReason` on
+`ScoreEvent`, and a required-but-nullable `retireReason` on
+`DerivedMatchState`/`DerivedMatchSummary` (null under the same conditions
+`retiredSide` is null — a normal win, or a RETIRE event that just finalises
+an already-decided match, has no reason because nobody retired).
+`deriveMatchState`'s `RETIRE` case defaults a missing reason to `RETIREMENT`,
+so every match recorded before this change (whose RETIRE events obviously
+carry no reason) still renders with a label instead of none.
+
+**Persistence reused the existing `payload` JSON column on `ScoreEvent`**
+rather than adding a dedicated column/migration — the same column
+`START_SET` already stores its own extra fields in
+(`firstServerSide`/`firstServerPlayerId`/`courtPositions`). `RETIRE` already
+spends its one dedicated column (`side`) on the winner; the reason is
+optional, so it goes in `payload: JSON.stringify({ reason })` instead
+(`packages/server/src/sockets/index.ts`'s `RETIRE_MATCH` handler), decoded
+back out in `packages/server/src/match/replay.ts` the same way START_SET's
+extra fields already were.
+
+**Umpire flow is now two steps instead of one.** "End match" used to open a
+single dialog asking which side the match is awarded to. It now asks _why_
+first (Retirement vs Walkover — opponent no-show), then which side, so the
+reason is known before the side-choice dialog needs it. Finalising an
+already-decided match (the winner is already on the board; the umpire is
+just signing it off) skips both — nobody retired, so there's nothing to ask.
+
+**Labels centralized the same way `INTERVAL_LABELS` already was** — two new
+maps in `packages/shared/src/scoring.ts`, `RETIRE_REASON_TAGS` (short tag:
+"Retired" / "W.O.") and `RETIRE_REASON_HEADLINES` (verb phrase for the "X
+wins the match — {phrase}" headline: "retired" / "did not show up (W.O.)"),
+so a third reason would only ever need updating in one place. Consumed by
+the TV screen, the umpire's own end-of-match summary, and the stream viewer.
+The admin dashboard's history list and status tag are the one localized
+surface — new `matchHistory.walkover` and `status.finalizedWalkover` keys in
+`en.ts`/`es.ts` — since everywhere else on this app still renders plain
+hardcoded English strings, matching each screen's existing (lack of) i18n
+rather than localizing screens this change didn't otherwise touch.
+
+**Found and fixed while at it:** the stream viewer (`StreamViewer.tsx`, the
+internet-facing broadcast overlay) never showed a retirement label at all,
+even before this session — a pre-existing gap in "everywhere a result is
+shown." It now shows the same "— {side} retired/did not show up" suffix as
+the TV screen. `public-viewer/index.html` (the no-build-step internet
+viewer) keeps its own mirrored copy of `RETIRE_REASON_HEADLINES`, same
+reasoning as its existing `INTERVAL_LABELS` mirror.
+
 ## Desktop app (`packages/desktop/`) — Electron wrapper
 
 **Why:** running the server required Node install + `npm install` + hand-

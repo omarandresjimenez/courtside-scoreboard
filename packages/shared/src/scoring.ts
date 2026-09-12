@@ -13,7 +13,7 @@
  * the one that closed it.
  */
 
-import type { CourtPositions, ScoreEvent, ScoringConfig, Side } from './types.js';
+import type { CourtPositions, RetireReason, ScoreEvent, ScoringConfig, Side } from './types.js';
 
 export interface SetResult {
   setNumber: number;
@@ -75,6 +75,23 @@ export const INTERVAL_LABELS: Record<IntervalKind, string> = {
   BETWEEN_GAMES: 'Game interval',
 };
 
+/**
+ * What each early-termination reason is called on screen — the tag shown
+ * next to the losing side's name, same idea as INTERVAL_LABELS above: the TV
+ * screen, umpire screen and stream viewer all render this tag, and the
+ * public internet viewer keeps a mirrored copy since it has no build step.
+ */
+export const RETIRE_REASON_TAGS: Record<RetireReason, string> = {
+  RETIREMENT: 'Retired',
+  WALKOVER: 'W.O.',
+};
+
+/** Verb phrase used in "{winner} wins the match — {loser} {phrase}" headlines. */
+export const RETIRE_REASON_HEADLINES: Record<RetireReason, string> = {
+  RETIREMENT: 'retired',
+  WALKOVER: 'did not show up (W.O.)',
+};
+
 export interface IntervalState {
   kind: IntervalKind;
   /** How long the break runs, in seconds. */
@@ -120,6 +137,13 @@ export interface DerivedMatchState {
    * is also a RETIRE event, but nobody retired, so this stays null.
    */
   retiredSide: Side | null;
+  /**
+   * Why the match ended early, set alongside retiredSide (null under the same
+   * conditions). Defaults to RETIREMENT when a RETIRE event that decides the
+   * match carries no explicit reason, so matches recorded before WALKOVER
+   * existed still render with a label instead of none.
+   */
+  retireReason: RetireReason | null;
 }
 
 const otherSide = (side: Side): Side => (side === 'A' ? 'B' : 'A');
@@ -174,6 +198,7 @@ export function deriveMatchState(
   let servingSide: Side | null = null;
   let finalised = false;
   let retiredSide: Side | null = null;
+  let retireReason: RetireReason | null = null;
   let firstServerPlayerId: string | null = null;
   let firstServerSide: Side | null = null;
 
@@ -213,7 +238,10 @@ export function deriveMatchState(
           // Only a retirement that *decides* the match retires anyone; the
           // same event arriving after a winner exists is the umpire signing
           // off a match that was already won on court.
-          if (!matchWinner) retiredSide = otherSide(event.side);
+          if (!matchWinner) {
+            retiredSide = otherSide(event.side);
+            retireReason = event.retireReason ?? 'RETIREMENT';
+          }
           matchWinner = event.side;
         }
         finalised = true;
@@ -375,6 +403,7 @@ export function deriveMatchState(
     serviceOver,
     finalised,
     retiredSide,
+    retireReason,
   };
 }
 

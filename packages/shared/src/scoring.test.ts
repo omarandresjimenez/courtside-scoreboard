@@ -1,5 +1,5 @@
 import { checkSetWinner, deriveMatchState, otherSide } from './scoring.js';
-import type { CourtPositions, ScoreEvent, ScoringConfig, Side } from './types.js';
+import type { CourtPositions, RetireReason, ScoreEvent, ScoringConfig, Side } from './types.js';
 import { SCORING_PRESETS } from './types.js';
 
 const standard: ScoringConfig = SCORING_PRESETS.standard;
@@ -31,9 +31,16 @@ function startSet(
     ...(firstServerSide ? { firstServerSide } : {}),
   };
 }
-function retire(side: Side, matchId = 'm1'): ScoreEvent {
+function retire(side: Side, matchId = 'm1', retireReason?: RetireReason): ScoreEvent {
   seq += 1;
-  return { eventId: `e${seq}`, matchId, type: 'RETIRE', side, timestamp: seq };
+  return {
+    eventId: `e${seq}`,
+    matchId,
+    type: 'RETIRE',
+    side,
+    timestamp: seq,
+    ...(retireReason ? { retireReason } : {}),
+  };
 }
 function resumeInterval(matchId = 'm1'): ScoreEvent {
   seq += 1;
@@ -558,5 +565,26 @@ describe('retiredSide', () => {
   it('names side B when B is the one who retires', () => {
     const events = [startSet(undefined, 'a1', 'A'), point('A'), retire('A')];
     expect(deriveMatchState(events, SCORING_PRESETS.standard).retiredSide).toBe('B');
+  });
+});
+
+describe('retireReason', () => {
+  it('is null for a match played to its conclusion', () => {
+    const events = [
+      startSet(undefined, 'a1', 'A'),
+      ...Array.from({ length: 42 }, () => point('A')),
+      retire('A'),
+    ];
+    expect(deriveMatchState(events, SCORING_PRESETS.standard).retireReason).toBeNull();
+  });
+
+  it('defaults to RETIREMENT when a match-ending RETIRE carries no explicit reason', () => {
+    const events = [startSet(undefined, 'a1', 'A'), point('A'), retire('B')];
+    expect(deriveMatchState(events, SCORING_PRESETS.standard).retireReason).toBe('RETIREMENT');
+  });
+
+  it('is WALKOVER when the umpire records a no-show', () => {
+    const events = [startSet(undefined, 'a1', 'A'), point('A'), retire('B', 'm1', 'WALKOVER')];
+    expect(deriveMatchState(events, SCORING_PRESETS.standard).retireReason).toBe('WALKOVER');
   });
 });

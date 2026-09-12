@@ -3,6 +3,7 @@ import {
   type CourtPositions,
   type Match,
   type MatchStatePayload,
+  type RetireReason,
   type ScoreEvent,
   type ScoringConfig,
   type Side,
@@ -41,6 +42,7 @@ export async function loadMatchState(matchId: string): Promise<MatchStatePayload
       ...(payload.courtPositions
         ? { courtPositions: payload.courtPositions as CourtPositions }
         : {}),
+      ...(payload.reason ? { retireReason: payload.reason as RetireReason } : {}),
       timestamp: Number(row.timestamp),
     };
   });
